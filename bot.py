@@ -106,6 +106,12 @@ async def init_db():
         )""")
         await db.commit()
 
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN rating INTEGER")
+            await db.commit()
+        except Exception:
+            pass
+
         defaults = {
             "working_hours_enabled": "1" if DEFAULT_WORKING_HOURS_ENABLED else "0",
             "working_hours_start": DEFAULT_WORKING_HOURS_START,
@@ -330,6 +336,24 @@ async def mark_message_read(message_id):
         await db.commit()
 
 
+async def set_rating(message_id, score):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE messages SET rating=? WHERE id=?", (score, message_id))
+        await db.commit()
+
+
+async def get_top_users(limit=5):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT u.user_id, u.username, u.full_name, COUNT(t.id) as cnt
+            FROM tickets t JOIN users u ON u.user_id = t.user_id
+            GROUP BY t.user_id ORDER BY cnt DESC LIMIT ?
+        """, (limit,))
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_ticket_history(ticket_id):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -350,6 +374,30 @@ async def set_setting(key, value):
         await db.execute("INSERT INTO settings (key, value) VALUES (?,?) "
                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         await db.commit()
+
+
+async def get_channels():
+    raw = await get_setting("channels", None)
+    if raw is None:
+        default = OFFICIAL_CHANNELS
+        await set_setting("channels", json.dumps(default, ensure_ascii=False))
+        return default
+    return json.loads(raw)
+
+
+async def add_channel(name, link):
+    channels = await get_channels()
+    channels.append([name, link])
+    await set_setting("channels", json.dumps(channels, ensure_ascii=False))
+
+
+async def remove_channel(index):
+    channels = await get_channels()
+    if 0 <= index < len(channels):
+        channels.pop(index)
+        await set_setting("channels", json.dumps(channels, ensure_ascii=False))
+        return True
+    return False
 
 
 async def get_stats():
@@ -395,40 +443,66 @@ async def export_csv():
 
 def main_menu_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="💡 Taklif", callback_data="cat:taklif")
-    b.button(text="❓ Murojaat", callback_data="cat:murojaat")
-    b.button(text="📢 Reklama", callback_data="cat:reklama")
-    b.button(text="📢 Rasmiy kanallarimiz", callback_data="channels")
+    b.button(text="🟡 💡 Taklif", callback_data="cat:taklif")
+    b.button(text="🔵 ❓ Murojaat", callback_data="cat:murojaat")
+    b.button(text="🟣 📢 Reklama", callback_data="cat:reklama")
+    b.button(text="🟢 📢 Rasmiy kanallarimiz", callback_data="channels")
+    b.button(text="🟠 📄 Mening murojaatlarim", callback_data="my_tickets")
     b.adjust(1)
     return b.as_markup()
 
 
-def channels_kb():
+QUICK_REPLIES = {
+    "thanks": "🙏 Rahmat, xabaringiz uchun!",
+    "review": "🔍 Ko'rib chiqmoqdamiz, tez orada to'liq javob beramiz.",
+    "done": "✅ Muammo hal qilindi. Boshqa savol bo'lsa, yozishingiz mumkin.",
+}
+
+
+def quick_reply_kb(message_id):
     b = InlineKeyboardBuilder()
-    for name, link in OFFICIAL_CHANNELS:
-        b.button(text=name, url=link)
+    b.button(text="🟢 🙏 Rahmat", callback_data=f"qreply:{message_id}:thanks")
+    b.button(text="🟡 🔍 Ko'rib chiqamiz", callback_data=f"qreply:{message_id}:review")
+    b.button(text="🟢 ✅ Hal qilindi", callback_data=f"qreply:{message_id}:done")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def rating_kb(message_id):
+    b = InlineKeyboardBuilder()
+    for i in range(1, 6):
+        b.button(text="⭐" * i, callback_data=f"rate:{message_id}:{i}")
+    b.adjust(5)
+    return b.as_markup()
+
+
+async def channels_kb():
+    channels = await get_channels()
+    b = InlineKeyboardBuilder()
+    for name, link in channels:
+        b.button(text=f"🟢 {name}", url=link)
     b.button(text="⬅️ Ortga", callback_data="back_to_menu")
     b.adjust(1)
     return b.as_markup()
 
 
-def mark_read_kb(message_id):
+def view_msg_kb(message_id):
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Xabarni o'qildi deb belgilash", callback_data=f"read_ticket:{message_id}")
+    b.button(text="🟢 👁 Xabarni ko'rish", callback_data=f"view_msg:{message_id}")
     b.adjust(1)
     return b.as_markup()
 
 
 def claim_kb(ticket_id):
     b = InlineKeyboardBuilder()
-    b.button(text="🙋 Men javob beraman", callback_data=f"claim:{ticket_id}")
+    b.button(text="🟢 🙋 Men javob beraman", callback_data=f"claim:{ticket_id}")
     b.adjust(1)
     return b.as_markup()
 
 
 def view_reply_kb(message_id):
     b = InlineKeyboardBuilder()
-    b.button(text="📖 Javobni ko'rish", callback_data=f"read_reply:{message_id}")
+    b.button(text="🔵 👁 Javobni ko'rish", callback_data=f"reveal_reply:{message_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -436,13 +510,14 @@ def view_reply_kb(message_id):
 def admin_main_kb():
     b = InlineKeyboardBuilder()
     b.button(text="📋 Barcha xabarlar", callback_data="adm_list:all")
-    b.button(text="💡 Takliflar", callback_data="adm_list:taklif")
-    b.button(text="❓ Murojaatlar", callback_data="adm_list:murojaat")
-    b.button(text="📢 Reklamalar", callback_data="adm_list:reklama")
-    b.button(text="🔵 O'qilmaganlar", callback_data="adm_list:unread")
+    b.button(text="🟡 💡 Takliflar", callback_data="adm_list:taklif")
+    b.button(text="🔵 ❓ Murojaatlar", callback_data="adm_list:murojaat")
+    b.button(text="🟣 📢 Reklamalar", callback_data="adm_list:reklama")
+    b.button(text="🔴 🔵 O'qilmaganlar", callback_data="adm_list:unread")
     b.button(text="📊 Statistika", callback_data="adm_stats")
     b.button(text="📤 Eksport (CSV)", callback_data="adm_export")
-    b.button(text="🚫 Bloklangan foydalanuvchilar", callback_data="adm_blocked")
+    b.button(text="🔴 🚫 Bloklangan foydalanuvchilar", callback_data="adm_blocked")
+    b.button(text="🟢 📢 Kanallarni boshqarish", callback_data="adm_channels")
     b.button(text="⚙️ Sozlamalar", callback_data="adm_settings")
     b.adjust(1)
     return b.as_markup()
@@ -453,15 +528,24 @@ def ticket_admin_kb(ticket):
     b = InlineKeyboardBuilder()
     b.button(text="👤 Foydalanuvchi tarixi", callback_data=f"adm_history:{ticket['user_id']}")
     if ticket["tag"] == "hal qilindi":
-        b.button(text="⏳ Kutilmoqda deb belgilash", callback_data=f"adm_tag:{tid}:kutilmoqda")
+        b.button(text="🟡 ⏳ Kutilmoqda deb belgilash", callback_data=f"adm_tag:{tid}:kutilmoqda")
     else:
-        b.button(text="✅ Hal qilindi deb belgilash", callback_data=f"adm_tag:{tid}:hal qilindi")
+        b.button(text="🟢 ✅ Hal qilindi deb belgilash", callback_data=f"adm_tag:{tid}:hal qilindi")
     if ticket.get("pinned"):
         b.button(text="📌 Pindan olish", callback_data=f"adm_pin:{tid}:0")
     else:
         b.button(text="📌 Pin qilish", callback_data=f"adm_pin:{tid}:1")
-    b.button(text="🚫 Foydalanuvchini bloklash", callback_data=f"adm_block:{ticket['user_id']}")
-    b.button(text="🗑 O'chirish", callback_data=f"adm_delete:{tid}")
+    b.button(text="🔴 🚫 Foydalanuvchini bloklash", callback_data=f"adm_block:{ticket['user_id']}")
+    b.button(text="🔴 🗑 O'chirish", callback_data=f"adm_delete:{tid}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def channels_manage_kb(channels):
+    b = InlineKeyboardBuilder()
+    for idx, (name, link) in enumerate(channels):
+        b.button(text=f"🔴 🗑 {name}", callback_data=f"adm_delchannel:{idx}")
+    b.button(text="⬅️ Ortga", callback_data="adm_back")
     b.adjust(1)
     return b.as_markup()
 
@@ -481,7 +565,7 @@ WELCOME_TEXT = (
     "📢 <b>Taklif, Murojaat va Reklama</b>\n\n"
     "Assalomu alaykum!\n\n"
     "Anifilm.uz jamoasi sizning har bir fikr va taklifingizni qadrlaydi.\n\n"
-    "💡 Takliflaringiz orqali platformamizni yanada rivojlantirishga yordam bera olasiz.\n"
+    "💡 Takliflaringiz orqali saytimizni yanada rivojlantirishga yordam bera olasiz.\n"
     "❓ Savol yoki murojaatlaringiz bo'lsa, administrator bilan bog'laning.\n"
     "📢 Reklama, hamkorlik yoki biznes takliflari bo'yicha ham murojaat qilishingiz mumkin.\n\n"
     "📝 Quyidagi bo'limlardan birini tanlang."
@@ -523,6 +607,17 @@ def contains_banned_words(text):
     return any(w in lowered for w in BANNED_WORDS)
 
 
+def make_preview(content_type, text_val, limit=80):
+    type_labels = {"photo": "🖼 Rasm", "video": "🎥 Video", "document": "📎 Fayl"}
+    base = type_labels.get(content_type)
+    snippet = (text_val or "").strip()
+    if snippet:
+        if len(snippet) > limit:
+            snippet = snippet[:limit] + "…"
+        return f"{base + ': ' if base else ''}{snippet}"
+    return base or "(matn yo'q)"
+
+
 @user_router.message(CommandStart())
 async def cmd_start(message: Message):
     await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
@@ -541,7 +636,26 @@ async def back_to_menu(call: CallbackQuery):
 @user_router.callback_query(F.data == "channels")
 async def show_channels(call: CallbackQuery):
     text = "📢 <b>Rasmiy kanallarimiz:</b>\n\nQuyidagi tugmalar orqali kanallarimizga o'ting."
-    await call.message.edit_text(text, reply_markup=channels_kb())
+    await call.message.edit_text(text, reply_markup=await channels_kb())
+    await call.answer()
+
+
+@user_router.callback_query(F.data == "my_tickets")
+async def my_tickets(call: CallbackQuery):
+    tickets = await get_user_tickets(call.from_user.id)
+    if not tickets:
+        text = "📄 Sizda hali murojaatlar yo'q."
+    else:
+        lines = ["📄 <b>Mening murojaatlarim:</b>\n"]
+        for t in tickets:
+            tag_mark = "✅" if t["tag"] == "hal qilindi" else "⏳"
+            cat = CATEGORIES.get(t["category"], t["category"])
+            lines.append(f"{tag_mark} #{t['id']} — {cat}")
+        text = "\n".join(lines)
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Ortga", callback_data="back_to_menu")
+    b.adjust(1)
+    await call.message.edit_text(text, reply_markup=b.as_markup())
     await call.answer()
 
 
@@ -617,25 +731,20 @@ async def handle_user_message(message: Message):
     )
 
     working = await is_within_working_hours()
+    preview = make_preview(content_type, text_val)
+    silent = not working
 
     for admin_id in ADMIN_IDS:
         try:
-            await message.bot.send_message(admin_id, header, reply_markup=claim_kb(ticket_id))
-            if content_type == "text":
-                sent = await message.bot.send_message(admin_id, text_val or "")
-            elif content_type == "photo":
-                sent = await message.bot.send_photo(admin_id, file_id, caption=text_val or "")
-            elif content_type == "video":
-                sent = await message.bot.send_video(admin_id, file_id, caption=text_val or "")
-            elif content_type == "document":
-                sent = await message.bot.send_document(admin_id, file_id, caption=text_val or "")
-            else:
-                continue
-
-            await message.bot.edit_message_reply_markup(
-                chat_id=admin_id, message_id=sent.message_id, reply_markup=mark_read_kb(msg_id)
+            await message.bot.send_message(
+                admin_id, header, reply_markup=claim_kb(ticket_id), disable_notification=silent
             )
-            await add_admin_forward(msg_id, ticket_id, admin_id, sent.message_id)
+            await message.bot.send_message(
+                admin_id,
+                f"📩 <b>Yangi xabar:</b>\n<i>{preview}</i>\n\nTo'liq ko'rish uchun tugmani bosing.",
+                reply_markup=view_msg_kb(msg_id),
+                disable_notification=silent
+            )
         except Exception:
             continue
 
@@ -648,25 +757,78 @@ async def handle_user_message(message: Message):
         await message.answer(confirm)
 
 
-@user_router.callback_query(F.data.startswith("read_reply:"))
-async def user_read_reply(call: CallbackQuery):
+@user_router.callback_query(F.data.startswith("reveal_reply:"))
+async def user_reveal_reply(call: CallbackQuery):
     message_id = int(call.data.split(":")[1])
     msg = await get_message(message_id)
     if not msg:
         await call.answer("Xabar topilmadi.")
         return
-    await mark_message_read(message_id)
-    ticket = await get_ticket(msg["ticket_id"])
-    admin_id = msg["admin_id"] or (ticket.get("claimed_by") if ticket else None)
-    if admin_id:
+
+    already_read = bool(msg["is_read"])
+
+    try:
+        if msg["content_type"] == "text":
+            await call.bot.send_message(call.from_user.id, msg["text"] or "")
+        elif msg["content_type"] == "photo":
+            await call.bot.send_photo(call.from_user.id, msg["file_id"], caption=msg["text"] or "")
+        elif msg["content_type"] == "video":
+            await call.bot.send_video(call.from_user.id, msg["file_id"], caption=msg["text"] or "")
+        elif msg["content_type"] == "document":
+            await call.bot.send_document(call.from_user.id, msg["file_id"], caption=msg["text"] or "")
+    except Exception:
+        pass
+
+    try:
+        await call.message.edit_text("✅ Javob ochildi (yuqorida).")
+    except Exception:
+        pass
+
+    if not already_read:
+        await mark_message_read(message_id)
+        ticket = await get_ticket(msg["ticket_id"])
+        admin_id = msg["admin_id"] or (ticket.get("claimed_by") if ticket else None)
+        if admin_id:
+            try:
+                await call.bot.send_message(
+                    admin_id,
+                    f"✅ Foydalanuvchi javobingizni o'qidi. (Ticket #{ticket['id']})"
+                )
+            except Exception:
+                pass
         try:
             await call.bot.send_message(
-                admin_id,
-                f"✅ Foydalanuvchi javobingizni o'qidi. (Ticket #{ticket['id']})"
+                call.from_user.id,
+                "Javobdan mamnunmisiz? Bahoni tanlang:",
+                reply_markup=rating_kb(message_id)
             )
         except Exception:
             pass
-    await call.answer("Rahmat!")
+    await call.answer()
+
+
+@user_router.callback_query(F.data.startswith("rate:"))
+async def user_rate(call: CallbackQuery):
+    _, message_id, score = call.data.split(":")
+    message_id, score = int(message_id), int(score)
+    await set_rating(message_id, score)
+    msg = await get_message(message_id)
+    if msg:
+        ticket = await get_ticket(msg["ticket_id"])
+        admin_id = msg["admin_id"]
+        if admin_id and ticket:
+            try:
+                await call.bot.send_message(
+                    admin_id,
+                    f"⭐ Foydalanuvchi javobingizni {score}/5 baholadi. (Ticket #{ticket['id']})"
+                )
+            except Exception:
+                pass
+    try:
+        await call.message.edit_text(f"Rahmat! Siz {score}/5 baho berdingiz. ⭐")
+    except Exception:
+        pass
+    await call.answer()
 
 
 # ======================= ADMIN QISMI =======================
@@ -819,6 +981,61 @@ async def adm_blocked_list(call: CallbackQuery):
     await call.answer()
 
 
+@admin_router.callback_query(F.data == "adm_channels")
+async def adm_channels(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    channels = await get_channels()
+    if channels:
+        lines = "\n".join(f"🟢 {name} — {link}" for name, link in channels)
+    else:
+        lines = "Hozircha kanal qo'shilmagan."
+    text = (
+        f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\n"
+        f"➕ Qo'shish: <code>/addchannel Nomi | https://t.me/link</code>\n"
+        f"🗑 O'chirish uchun pastdagi tugmani bosing."
+    )
+    await call.message.edit_text(text, reply_markup=channels_manage_kb(channels))
+    await call.answer()
+
+
+@admin_router.callback_query(F.data.startswith("adm_delchannel:"))
+async def adm_delchannel(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    idx = int(call.data.split(":")[1])
+    ok = await remove_channel(idx)
+    channels = await get_channels()
+    if ok:
+        await call.answer("Kanal o'chirildi ✅")
+    else:
+        await call.answer("Topilmadi")
+    lines = "\n".join(f"🟢 {name} — {link}" for name, link in channels) if channels else "Hozircha kanal qo'shilmagan."
+    text = (
+        f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\n"
+        f"➕ Qo'shish: <code>/addchannel Nomi | https://t.me/link</code>\n"
+        f"🗑 O'chirish uchun pastdagi tugmani bosing."
+    )
+    await call.message.edit_text(text, reply_markup=channels_manage_kb(channels))
+
+
+@admin_router.message(Command("addchannel"))
+async def addchannel_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    raw = message.text.replace("/addchannel", "", 1).strip()
+    if "|" not in raw:
+        await message.answer("Foydalanish: /addchannel Nomi | https://t.me/link")
+        return
+    name, link = raw.split("|", 1)
+    name, link = name.strip(), link.strip()
+    if not name or not link:
+        await message.answer("Foydalanish: /addchannel Nomi | https://t.me/link")
+        return
+    await add_channel(name, link)
+    await message.answer(f"✅ Kanal qo'shildi: 🟢 {name} — {link}")
+
+
 @admin_router.callback_query(F.data.startswith("claim:"))
 async def claim_ticket_cb(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -829,26 +1046,87 @@ async def claim_ticket_cb(call: CallbackQuery):
     await call.message.answer(f"🙋 Siz Ticket #{ticket_id} ga javobgar sifatida belgilandingiz.")
 
 
-@admin_router.callback_query(F.data.startswith("read_ticket:"))
-async def admin_mark_read(call: CallbackQuery):
+@admin_router.callback_query(F.data.startswith("view_msg:"))
+async def admin_view_msg(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
     message_id = int(call.data.split(":")[1])
-    if message_id == 0:
-        await call.answer("Bu xabar eskirgan format.")
-        return
     msg = await get_message(message_id)
     if not msg:
         await call.answer("Xabar topilmadi.")
         return
-    await mark_message_read(message_id)
-    ticket = await get_ticket(msg["ticket_id"])
-    if ticket:
+
+    already_read = bool(msg["is_read"])
+    admin_id = call.from_user.id
+
+    sent = None
+    try:
+        if msg["content_type"] == "text":
+            sent = await call.bot.send_message(admin_id, msg["text"] or "")
+        elif msg["content_type"] == "photo":
+            sent = await call.bot.send_photo(admin_id, msg["file_id"], caption=msg["text"] or "")
+        elif msg["content_type"] == "video":
+            sent = await call.bot.send_video(admin_id, msg["file_id"], caption=msg["text"] or "")
+        elif msg["content_type"] == "document":
+            sent = await call.bot.send_document(admin_id, msg["file_id"], caption=msg["text"] or "")
+    except Exception:
+        pass
+
+    if sent:
+        await add_admin_forward(message_id, msg["ticket_id"], admin_id, sent.message_id)
         try:
-            await call.bot.send_message(ticket["user_id"], "✅ Xabaringiz o'qildi. Tez orada javob beramiz.")
+            await call.bot.send_message(
+                admin_id,
+                "👆 Javob berish uchun shu xabarga <b>Reply</b> qiling,\nyoki tayyor javoblardan birini tanlang:",
+                reply_markup=quick_reply_kb(message_id)
+            )
         except Exception:
             pass
-    await call.answer("Belgilandi ✅")
+
+    try:
+        await call.message.edit_text("✅ Xabar ochildi (yuqorida).")
+    except Exception:
+        pass
+
+    if not already_read:
+        await mark_message_read(message_id)
+        ticket = await get_ticket(msg["ticket_id"])
+        if ticket:
+            try:
+                await call.bot.send_message(ticket["user_id"], "✅ Xabaringiz o'qildi. Tez orada javob beramiz.")
+            except Exception:
+                pass
+    await call.answer()
+
+
+@admin_router.callback_query(F.data.startswith("qreply:"))
+async def admin_quick_reply(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    _, message_id, key = call.data.split(":")
+    message_id = int(message_id)
+    text_val = QUICK_REPLIES.get(key)
+    if not text_val:
+        await call.answer("Noma'lum shablon")
+        return
+    msg = await get_message(message_id)
+    if not msg:
+        await call.answer("Xabar topilmadi")
+        return
+    ticket = await get_ticket(msg["ticket_id"])
+    if not ticket:
+        await call.answer("Ticket topilmadi")
+        return
+    reply_msg_id = await add_message(ticket["id"], "admin", "text", text_val, None, admin_id=call.from_user.id)
+    try:
+        await call.bot.send_message(
+            ticket["user_id"],
+            "📩 Sizga javob keldi. Ko'rish uchun tugmani bosing.",
+            reply_markup=view_reply_kb(reply_msg_id)
+        )
+        await call.answer("Yuborildi ✅")
+    except Exception:
+        await call.answer("Xatolik yuz berdi")
 
 
 @admin_router.callback_query(F.data == "adm_stats")
@@ -944,6 +1222,21 @@ async def search_cmd(message: Message):
     await message.answer("\n".join(lines))
 
 
+@admin_router.message(Command("topusers"))
+async def top_users_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    top = await get_top_users()
+    if not top:
+        await message.answer("Hozircha ma'lumot yo'q.")
+        return
+    lines = ["🏆 <b>Eng ko'p murojaat qiluvchilar:</b>\n"]
+    for i, u in enumerate(top, 1):
+        username = f"@{u['username']}" if u["username"] else u["full_name"]
+        lines.append(f"{i}. {username} — {u['cnt']} ta murojaat")
+    await message.answer("\n".join(lines))
+
+
 @admin_router.message(Command("backup"))
 async def backup_cmd(message: Message):
     if not is_admin(message.from_user.id):
@@ -988,14 +1281,11 @@ async def handle_admin_reply(message: Message):
 
     reply_kb = view_reply_kb(reply_msg_id)
     try:
-        if content_type == "text":
-            await message.bot.send_message(ticket["user_id"], text_val or "", reply_markup=reply_kb)
-        elif content_type == "photo":
-            await message.bot.send_photo(ticket["user_id"], file_id, caption=text_val or "", reply_markup=reply_kb)
-        elif content_type == "video":
-            await message.bot.send_video(ticket["user_id"], file_id, caption=text_val or "", reply_markup=reply_kb)
-        elif content_type == "document":
-            await message.bot.send_document(ticket["user_id"], file_id, caption=text_val or "", reply_markup=reply_kb)
+        await message.bot.send_message(
+            ticket["user_id"],
+            "📩 Sizga javob keldi. Ko'rish uchun tugmani bosing.",
+            reply_markup=reply_kb
+        )
         await message.answer("✅ Javobingiz foydalanuvchiga yuborildi.")
     except Exception as e:
         await message.answer(f"❌ Yuborib bo'lmadi: {e}")
@@ -1003,8 +1293,57 @@ async def handle_admin_reply(message: Message):
 
 # ======================= ISHGA TUSHIRISH =======================
 
+async def daily_backup_task(bot: Bot):
+    while True:
+        await asyncio.sleep(24 * 3600)
+        try:
+            with open(DB_PATH, "rb") as f:
+                data = f.read()
+            for admin_id in ADMIN_IDS:
+                try:
+                    file = BufferedInputFile(data, filename="kunlik_backup.db")
+                    await bot.send_document(admin_id, file, caption="🔄 Kunlik avtomatik zaxira nusxa")
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+
+async def weekly_report_task(bot: Bot):
+    while True:
+        await asyncio.sleep(7 * 24 * 3600)
+        try:
+            s = await get_stats()
+            top = await get_top_users(3)
+            lines = [
+                "📊 <b>Haftalik hisobot</b>\n",
+                f"👥 Foydalanuvchilar: {s['users']}",
+                f"🎫 Jami murojaatlar: {s['tickets_total']}",
+                f"💡 Takliflar: {s.get('cat_taklif', 0)}",
+                f"❓ Murojaatlar: {s.get('cat_murojaat', 0)}",
+                f"📢 Reklamalar: {s.get('cat_reklama', 0)}",
+                f"✅ Hal qilingan: {s['resolved']}",
+                f"⏳ Kutilayotgan: {s['pending']}",
+            ]
+            if top:
+                lines.append("\n🏆 Eng faol foydalanuvchilar:")
+                for i, u in enumerate(top, 1):
+                    username = f"@{u['username']}" if u["username"] else u["full_name"]
+                    lines.append(f"{i}. {username} — {u['cnt']} ta")
+            text = "\n".join(lines)
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(admin_id, text)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+
 async def on_startup(bot: Bot):
     await init_db()
+    asyncio.create_task(daily_backup_task(bot))
+    asyncio.create_task(weekly_report_task(bot))
     logging.info("Baza tayyor, bot ishga tushmoqda...")
 
 
