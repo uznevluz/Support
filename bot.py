@@ -443,11 +443,11 @@ async def export_csv():
 
 def main_menu_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="🟡 💡 Taklif", callback_data="cat:taklif")
-    b.button(text="🔵 ❓ Murojaat", callback_data="cat:murojaat")
-    b.button(text="🟣 📢 Reklama", callback_data="cat:reklama")
-    b.button(text="🟢 📢 Rasmiy kanallarimiz", callback_data="channels")
-    b.button(text="🟠 📄 Mening murojaatlarim", callback_data="my_tickets")
+    b.button(text="💡 Taklif", callback_data="cat:taklif")
+    b.button(text="❓ Murojaat", callback_data="cat:murojaat", style="primary")
+    b.button(text="📢 Reklama", callback_data="cat:reklama")
+    b.button(text="📢 Rasmiy kanallarimiz", callback_data="channels", style="success")
+    b.button(text="📄 Mening murojaatlarim", callback_data="my_tickets")
     b.adjust(1)
     return b.as_markup()
 
@@ -461,9 +461,9 @@ QUICK_REPLIES = {
 
 def quick_reply_kb(message_id):
     b = InlineKeyboardBuilder()
-    b.button(text="🟢 🙏 Rahmat", callback_data=f"qreply:{message_id}:thanks")
-    b.button(text="🟡 🔍 Ko'rib chiqamiz", callback_data=f"qreply:{message_id}:review")
-    b.button(text="🟢 ✅ Hal qilindi", callback_data=f"qreply:{message_id}:done")
+    b.button(text="🙏 Rahmat", callback_data=f"qreply:{message_id}:thanks", style="success")
+    b.button(text="🔍 Ko'rib chiqamiz", callback_data=f"qreply:{message_id}:review", style="primary")
+    b.button(text="✅ Hal qilindi", callback_data=f"qreply:{message_id}:done", style="success")
     b.adjust(1)
     return b.as_markup()
 
@@ -480,7 +480,7 @@ async def channels_kb():
     channels = await get_channels()
     b = InlineKeyboardBuilder()
     for name, link in channels:
-        b.button(text=f"🟢 {name}", url=link)
+        b.button(text=name, url=link, style="success")
     b.button(text="⬅️ Ortga", callback_data="back_to_menu")
     b.adjust(1)
     return b.as_markup()
@@ -488,21 +488,21 @@ async def channels_kb():
 
 def view_msg_kb(message_id):
     b = InlineKeyboardBuilder()
-    b.button(text="🟢 👁 Xabarni ko'rish", callback_data=f"view_msg:{message_id}")
+    b.button(text="👁 Xabarni ko'rish", callback_data=f"view_msg:{message_id}", style="success")
     b.adjust(1)
     return b.as_markup()
 
 
 def claim_kb(ticket_id):
     b = InlineKeyboardBuilder()
-    b.button(text="🟢 🙋 Men javob beraman", callback_data=f"claim:{ticket_id}")
+    b.button(text="🙋 Men javob beraman", callback_data=f"claim:{ticket_id}", style="success")
     b.adjust(1)
     return b.as_markup()
 
 
 def view_reply_kb(message_id):
     b = InlineKeyboardBuilder()
-    b.button(text="🔵 👁 Javobni ko'rish", callback_data=f"reveal_reply:{message_id}")
+    b.button(text="👁 Javobni ko'rish", callback_data=f"reveal_reply:{message_id}", style="primary")
     b.adjust(1)
     return b.as_markup()
 
@@ -510,14 +510,14 @@ def view_reply_kb(message_id):
 def admin_main_kb():
     b = InlineKeyboardBuilder()
     b.button(text="📋 Barcha xabarlar", callback_data="adm_list:all")
-    b.button(text="🟡 💡 Takliflar", callback_data="adm_list:taklif")
-    b.button(text="🔵 ❓ Murojaatlar", callback_data="adm_list:murojaat")
-    b.button(text="🟣 📢 Reklamalar", callback_data="adm_list:reklama")
-    b.button(text="🔴 🔵 O'qilmaganlar", callback_data="adm_list:unread")
+    b.button(text="💡 Takliflar", callback_data="adm_list:taklif")
+    b.button(text="❓ Murojaatlar", callback_data="adm_list:murojaat", style="primary")
+    b.button(text="📢 Reklamalar", callback_data="adm_list:reklama")
+    b.button(text="🔵 O'qilmaganlar", callback_data="adm_list:unread", style="danger")
     b.button(text="📊 Statistika", callback_data="adm_stats")
     b.button(text="📤 Eksport (CSV)", callback_data="adm_export")
-    b.button(text="🔴 🚫 Bloklangan foydalanuvchilar", callback_data="adm_blocked")
-    b.button(text="🟢 📢 Kanallarni boshqarish", callback_data="adm_channels")
+    b.button(text="🚫 Bloklangan foydalanuvchilar", callback_data="adm_blocked", style="danger")
+    b.button(text="📢 Kanallarni boshqarish", callback_data="adm_channels", style="success")
     b.button(text="⚙️ Sozlamalar", callback_data="adm_settings")
     b.adjust(1)
     return b.as_markup()
@@ -528,15 +528,15 @@ def ticket_admin_kb(ticket):
     b = InlineKeyboardBuilder()
     b.button(text="👤 Foydalanuvchi tarixi", callback_data=f"adm_history:{ticket['user_id']}")
     if ticket["tag"] == "hal qilindi":
-        b.button(text="🟡 ⏳ Kutilmoqda deb belgilash", callback_data=f"adm_tag:{tid}:kutilmoqda")
+        b.button(text="⏳ Kutilmoqda deb belgilash", callback_data=f"adm_tag:{tid}:kutilmoqda")
     else:
-        b.button(text="🟢 ✅ Hal qilindi deb belgilash", callback_data=f"adm_tag:{tid}:hal qilindi")
+        b.button(text="✅ Hal qilindi deb belgilash", callback_data=f"adm_tag:{tid}:hal qilindi", style="success")
     if ticket.get("pinned"):
         b.button(text="📌 Pindan olish", callback_data=f"adm_pin:{tid}:0")
     else:
         b.button(text="📌 Pin qilish", callback_data=f"adm_pin:{tid}:1")
-    b.button(text="🔴 🚫 Foydalanuvchini bloklash", callback_data=f"adm_block:{ticket['user_id']}")
-    b.button(text="🔴 🗑 O'chirish", callback_data=f"adm_delete:{tid}")
+    b.button(text="🚫 Foydalanuvchini bloklash", callback_data=f"adm_block:{ticket['user_id']}", style="danger")
+    b.button(text="🗑 O'chirish", callback_data=f"adm_delete:{tid}", style="danger")
     b.adjust(1)
     return b.as_markup()
 
@@ -544,7 +544,7 @@ def ticket_admin_kb(ticket):
 def channels_manage_kb(channels):
     b = InlineKeyboardBuilder()
     for idx, (name, link) in enumerate(channels):
-        b.button(text=f"🔴 🗑 {name}", callback_data=f"adm_delchannel:{idx}")
+        b.button(text=f"🗑 {name}", callback_data=f"adm_delchannel:{idx}", style="danger")
     b.button(text="⬅️ Ortga", callback_data="adm_back")
     b.adjust(1)
     return b.as_markup()
