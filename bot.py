@@ -245,11 +245,20 @@ async def call_gemini(prompt, system_instruction=None):
                 url, json=payload, timeout=aiohttp.ClientTimeout(total=20)
             ) as resp:
                 data = await resp.json()
+                if resp.status != 200:
+                    logging.error(f"Gemini API xatolik (status {resp.status}): {data}")
+                    return None
+                if "error" in data:
+                    logging.error(f"Gemini API xatolik javobi: {data['error']}")
+                    return None
                 candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return (parts[0].get("text") or "").strip() or None
+                if not candidates:
+                    logging.error(f"Gemini javobida candidates yo'q: {data}")
+                    return None
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    return (parts[0].get("text") or "").strip() or None
+                logging.error(f"Gemini javobida parts yo'q: {data}")
     except Exception as e:
         logging.error(f"Gemini xatolik: {e}")
     return None
