@@ -6,13 +6,14 @@ import io
 import logging
 import asyncio
 
+import aiohttp
 import aiosqlite
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.types import Message, CallbackQuery, BufferedInputFile, ErrorEvent
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +23,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "5383321037").split(",") if x.strip()]
 PORT = int(os.getenv("PORT", "10000"))
 DB_PATH = os.getenv("DB_PATH", "bot.db")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 CATEGORIES = {
     "taklif": "💡 Taklif",
@@ -49,6 +52,217 @@ BANNED_WORDS = []
 DEFAULT_WORKING_HOURS_ENABLED = True
 DEFAULT_WORKING_HOURS_START = "09:00"
 DEFAULT_WORKING_HOURS_END = "18:00"
+
+# ======================= TILLAR =======================
+
+LANG_LABELS = {
+    "uz": "🇺🇿 O'zbek tili",
+    "ru": "🇷🇺 Русский язык",
+    "en": "🇬🇧 English",
+}
+
+TEXTS = {
+    "welcome": {
+        "uz": (
+            "📢 <b>Taklif, Murojaat va Reklama</b>\n\n"
+            "Assalomu alaykum!\n\n"
+            "Anifilm.uz jamoasi sizning har bir fikr va taklifingizni qadrlaydi.\n\n"
+            "💡 Takliflaringiz orqali saytimizni yanada rivojlantirishga yordam bera olasiz.\n"
+            "❓ Savol yoki murojaatlaringiz bo'lsa, administrator bilan bog'laning.\n"
+            "📢 Reklama, hamkorlik yoki biznes takliflari bo'yicha ham murojaat qilishingiz mumkin.\n\n"
+            "📝 Quyidagi bo'limlardan birini tanlang."
+        ),
+        "ru": (
+            "📢 <b>Предложение, Обращение и Реклама</b>\n\n"
+            "Ассалому алайкум!\n\n"
+            "Команда Anifilm.uz ценит каждое ваше мнение и предложение.\n\n"
+            "💡 Через свои предложения вы можете помочь развитию нашего сайта.\n"
+            "❓ Если у вас есть вопросы или обращения, свяжитесь с администратором.\n"
+            "📢 Вы также можете обратиться по вопросам рекламы и сотрудничества.\n\n"
+            "📝 Выберите один из разделов ниже."
+        ),
+        "en": (
+            "📢 <b>Suggestions, Inquiries and Advertising</b>\n\n"
+            "Hello!\n\n"
+            "The Anifilm.uz team values every opinion and suggestion you share.\n\n"
+            "💡 Your suggestions help us improve our site.\n"
+            "❓ If you have questions or inquiries, contact the administrator.\n"
+            "📢 You can also reach out regarding advertising or partnership offers.\n\n"
+            "📝 Please choose one of the sections below."
+        ),
+    },
+    "prompt_taklif": {
+        "uz": "💡 Taklifingizni yozib qoldiring (matn, rasm yoki video yuborishingiz mumkin).",
+        "ru": "💡 Напишите ваше предложение (можно отправить текст, фото или видео).",
+        "en": "💡 Write your suggestion (you can send text, photo, or video).",
+    },
+    "prompt_murojaat": {
+        "uz": "❓ Murojaatingizni yozib qoldiring (matn, rasm yoki video yuborishingiz mumkin).",
+        "ru": "❓ Напишите ваше обращение (можно отправить текст, фото или видео).",
+        "en": "❓ Write your inquiry (you can send text, photo, or video).",
+    },
+    "prompt_reklama": {
+        "uz": "📢 Reklama/hamkorlik taklifingizni yozib qoldiring (matn, rasm yoki video yuborishingiz mumkin).",
+        "ru": "📢 Напишите предложение по рекламе/сотрудничеству (можно отправить текст, фото или видео).",
+        "en": "📢 Write your advertising/partnership offer (you can send text, photo, or video).",
+    },
+    "btn_taklif": {"uz": "💡 Taklif", "ru": "💡 Предложение", "en": "💡 Suggestion"},
+    "btn_murojaat": {"uz": "❓ Murojaat", "ru": "❓ Обращение", "en": "❓ Inquiry"},
+    "btn_reklama": {"uz": "📢 Reklama", "ru": "📢 Реклама", "en": "📢 Advertising"},
+    "btn_channels": {
+        "uz": "📢 Rasmiy kanallarimiz",
+        "ru": "📢 Наши официальные каналы",
+        "en": "📢 Our official channels",
+    },
+    "btn_my_tickets": {
+        "uz": "📄 Mening murojaatlarim",
+        "ru": "📄 Мои обращения",
+        "en": "📄 My requests",
+    },
+    "btn_language": {"uz": "🌐 Til", "ru": "🌐 Язык", "en": "🌐 Language"},
+    "blocked": {
+        "uz": "🚫 Siz botdan foydalanish huquqidan mahrum qilingansiz.",
+        "ru": "🚫 Вы лишены права пользоваться ботом.",
+        "en": "🚫 You have been restricted from using this bot.",
+    },
+    "choose_category_first": {
+        "uz": "Iltimos, avval bo'lim tanlang:",
+        "ru": "Пожалуйста, сначала выберите раздел:",
+        "en": "Please choose a section first:",
+    },
+    "confirm_received": {
+        "uz": "✅ Xabaringiz qabul qilindi, tez orada javob beramiz.",
+        "ru": "✅ Ваше сообщение принято, скоро ответим.",
+        "en": "✅ Your message has been received, we'll reply soon.",
+    },
+    "after_hours_add": {
+        "uz": "\n\n🕐 Hozir ish vaqtidan tashqari, shuning uchun javob berish biroz kechikishi mumkin.",
+        "ru": "\n\n🕐 Сейчас нерабочее время, поэтому ответ может немного задержаться.",
+        "en": "\n\n🕐 It's currently outside working hours, so the reply may be a bit delayed.",
+    },
+    "flood_msg": {
+        "uz": "⏳ Siz juda tez-tez xabar yuboryapsiz. Iltimos, biroz kuting.",
+        "ru": "⏳ Вы отправляете сообщения слишком часто. Пожалуйста, подождите.",
+        "en": "⏳ You're sending messages too fast. Please wait a moment.",
+    },
+    "duplicate_msg": {
+        "uz": "📵 Siz shu xabarni allaqachon yubordingiz. Iltimos, kuting, tez orada javob beramiz.",
+        "ru": "📵 Вы уже отправили это сообщение. Пожалуйста, подождите, скоро ответим.",
+        "en": "📵 You've already sent this message. Please wait, we'll respond soon.",
+    },
+    "banned_msg": {
+        "uz": "⚠️ Xabaringizda taqiqlangan so'zlar aniqlandi. Iltimos, xabaringizni tahrirlab qayta yuboring.",
+        "ru": "⚠️ В вашем сообщении обнаружены запрещённые слова. Пожалуйста, отредактируйте и отправьте снова.",
+        "en": "⚠️ Your message contains restricted words. Please edit and resend.",
+    },
+    "my_tickets_header": {
+        "uz": "📄 <b>Mening murojaatlarim:</b>\n",
+        "ru": "📄 <b>Мои обращения:</b>\n",
+        "en": "📄 <b>My requests:</b>\n",
+    },
+    "no_tickets": {
+        "uz": "📄 Sizda hali murojaatlar yo'q.",
+        "ru": "📄 У вас пока нет обращений.",
+        "en": "📄 You don't have any requests yet.",
+    },
+    "channels_header": {
+        "uz": "📢 <b>Rasmiy kanallarimiz:</b>\n\nQuyidagi tugmalar orqali kanallarimizga o'ting.",
+        "ru": "📢 <b>Наши официальные каналы:</b>\n\nПерейдите по кнопкам ниже.",
+        "en": "📢 <b>Our official channels:</b>\n\nUse the buttons below to visit.",
+    },
+    "rating_prompt": {
+        "uz": "Javobdan mamnunmisiz? Bahoni tanlang:",
+        "ru": "Довольны ли вы ответом? Выберите оценку:",
+        "en": "Are you satisfied with the response? Choose a rating:",
+    },
+    "rating_thanks": {
+        "uz": "Rahmat! Siz {score}/5 baho berdingiz. ⭐",
+        "ru": "Спасибо! Вы поставили оценку {score}/5. ⭐",
+        "en": "Thanks! You rated {score}/5. ⭐",
+    },
+    "reveal_opened": {
+        "uz": "✅ Javob ochildi (yuqorida).",
+        "ru": "✅ Ответ открыт (выше).",
+        "en": "✅ Reply opened (above).",
+    },
+    "reply_notify": {
+        "uz": "📩 Sizga javob keldi. Ko'rish uchun tugmani bosing.",
+        "ru": "📩 Вам пришёл ответ. Нажмите кнопку, чтобы посмотреть.",
+        "en": "📩 You've received a reply. Tap the button to view.",
+    },
+    "back_button": {"uz": "⬅️ Ortga", "ru": "⬅️ Назад", "en": "⬅️ Back"},
+    "cancel_button": {"uz": "❌ Bekor qilish", "ru": "❌ Отмена", "en": "❌ Cancel"},
+    "choose_language": {
+        "uz": "🌐 Tilni tanlang:",
+        "ru": "🌐 Выберите язык:",
+        "en": "🌐 Choose your language:",
+    },
+    "language_set": {
+        "uz": "✅ Til o'zgartirildi.",
+        "ru": "✅ Язык изменён.",
+        "en": "✅ Language updated.",
+    },
+    "ai_prefix": {
+        "uz": "🤖 AI dastlabki javob:",
+        "ru": "🤖 Предварительный ответ ИИ:",
+        "en": "🤖 Preliminary AI reply:",
+    },
+}
+
+
+def t(key, lang, **kwargs):
+    bundle = TEXTS.get(key, {})
+    text_val = bundle.get(lang) or bundle.get("uz", "")
+    if kwargs:
+        text_val = text_val.format(**kwargs)
+    return text_val
+
+
+# ======================= GEMINI AI =======================
+
+async def call_gemini(prompt, system_instruction=None):
+    if not GEMINI_API_KEY or not prompt:
+        return None
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=20)
+            ) as resp:
+                data = await resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return (parts[0].get("text") or "").strip() or None
+    except Exception as e:
+        logging.error(f"Gemini xatolik: {e}")
+    return None
+
+
+async def ai_summarize_ticket(ticket_id):
+    history = await get_ticket_history(ticket_id)
+    if not history:
+        return None
+    convo_lines = []
+    for m in history:
+        sender = "Foydalanuvchi" if m["sender"] == "user" else "Admin"
+        content = m["text"] or f"[{m['content_type']}]"
+        convo_lines.append(f"{sender}: {content}")
+    convo_text = "\n".join(convo_lines)
+    system_instruction = (
+        "Siz admin uchun yordamchisiz. Quyidagi yozishmani 2-4 gapda o'zbek tilida "
+        "qisqacha xulosalab ber: asosiy muammo nima, foydalanuvchi nima kutmoqda, "
+        "va hozirgi holat qanday."
+    )
+    return await call_gemini(convo_text, system_instruction)
+
 
 # ======================= MA'LUMOTLAR BAZASI =======================
 
@@ -106,16 +320,27 @@ async def init_db():
         )""")
         await db.commit()
 
-        try:
-            await db.execute("ALTER TABLE messages ADD COLUMN rating INTEGER")
-            await db.commit()
-        except Exception:
-            pass
+        for alter_sql in [
+            "ALTER TABLE messages ADD COLUMN rating INTEGER",
+            "ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'uz'",
+            "ALTER TABLE tickets ADD COLUMN last_reminder_at INTEGER DEFAULT 0",
+        ]:
+            try:
+                await db.execute(alter_sql)
+                await db.commit()
+            except Exception:
+                pass
 
         defaults = {
             "working_hours_enabled": "1" if DEFAULT_WORKING_HOURS_ENABLED else "0",
             "working_hours_start": DEFAULT_WORKING_HOURS_START,
             "working_hours_end": DEFAULT_WORKING_HOURS_END,
+            "flood_limit_messages": str(FLOOD_LIMIT_MESSAGES),
+            "flood_limit_seconds": str(FLOOD_LIMIT_SECONDS),
+            "duplicate_window_seconds": str(DUPLICATE_WINDOW_SECONDS),
+            "reminder_minutes": "30",
+            "auto_assign_enabled": "1",
+            "admin_rotation_index": "0",
         }
         for k, v in defaults.items():
             await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -139,6 +364,19 @@ async def get_or_create_user(user_id, username, full_name):
         await db.commit()
 
 
+async def get_user_language(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT language FROM users WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return (row[0] if row and row[0] else "uz")
+
+
+async def set_user_language(user_id, lang):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET language=? WHERE user_id=?", (lang, user_id))
+        await db.commit()
+
+
 async def is_blocked(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT is_blocked FROM users WHERE user_id=?", (user_id,))
@@ -152,7 +390,22 @@ async def set_blocked(user_id, blocked):
         await db.commit()
 
 
+async def get_all_active_user_ids():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM users WHERE is_blocked=0")
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
+async def get_flood_settings():
+    limit_msgs = int(await get_setting("flood_limit_messages", str(FLOOD_LIMIT_MESSAGES)))
+    limit_secs = int(await get_setting("flood_limit_seconds", str(FLOOD_LIMIT_SECONDS)))
+    dup_window = int(await get_setting("duplicate_window_seconds", str(DUPLICATE_WINDOW_SECONDS)))
+    return limit_msgs, limit_secs, dup_window
+
+
 async def check_flood(user_id):
+    limit_msgs, limit_secs, _ = await get_flood_settings()
     now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT window_start, window_count FROM users WHERE user_id=?", (user_id,))
@@ -160,11 +413,11 @@ async def check_flood(user_id):
         if not row:
             return True
         window_start, window_count = row
-        if now - window_start > FLOOD_LIMIT_SECONDS:
+        if now - window_start > limit_secs:
             await db.execute("UPDATE users SET window_start=?, window_count=1 WHERE user_id=?", (now, user_id))
             await db.commit()
             return True
-        if window_count >= FLOOD_LIMIT_MESSAGES:
+        if window_count >= limit_msgs:
             return False
         await db.execute("UPDATE users SET window_count=window_count+1 WHERE user_id=?", (user_id,))
         await db.commit()
@@ -174,12 +427,13 @@ async def check_flood(user_id):
 async def check_duplicate(user_id, text):
     if not text:
         return False
+    _, _, dup_window = await get_flood_settings()
     now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT last_text, last_text_time FROM users WHERE user_id=?", (user_id,))
         row = await cur.fetchone()
         is_dup = False
-        if row and row[0] == text and (now - (row[1] or 0)) < DUPLICATE_WINDOW_SECONDS:
+        if row and row[0] == text and (now - (row[1] or 0)) < dup_window:
             is_dup = True
         await db.execute("UPDATE users SET last_text=?, last_text_time=?, last_message_at=? WHERE user_id=?",
                           (text, now, now, user_id))
@@ -220,6 +474,20 @@ async def claim_ticket(ticket_id, admin_id):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE tickets SET claimed_by=? WHERE id=?", (admin_id, ticket_id))
         await db.commit()
+
+
+async def get_next_admin():
+    if not ADMIN_IDS:
+        return None
+    if len(ADMIN_IDS) == 1:
+        return ADMIN_IDS[0]
+    enabled = await get_setting("auto_assign_enabled", "1")
+    if enabled != "1":
+        return None
+    idx = int(await get_setting("admin_rotation_index", "0"))
+    admin_id = ADMIN_IDS[idx % len(ADMIN_IDS)]
+    await set_setting("admin_rotation_index", str((idx + 1) % len(ADMIN_IDS)))
+    return admin_id
 
 
 async def set_tag(ticket_id, tag):
@@ -400,6 +668,35 @@ async def remove_channel(index):
     return False
 
 
+async def get_templates():
+    raw = await get_setting("templates", None)
+    if raw is None:
+        default = [
+            {"id": "thanks", "label": "🙏 Rahmat", "text": "🙏 Rahmat, xabaringiz uchun!"},
+            {"id": "review", "label": "🔍 Ko'rib chiqamiz", "text": "🔍 Ko'rib chiqmoqdamiz, tez orada to'liq javob beramiz."},
+            {"id": "done", "label": "✅ Hal qilindi", "text": "✅ Muammo hal qilindi. Boshqa savol bo'lsa, yozishingiz mumkin."},
+        ]
+        await set_setting("templates", json.dumps(default, ensure_ascii=False))
+        return default
+    return json.loads(raw)
+
+
+async def add_template(label, text_val):
+    templates = await get_templates()
+    new_id = f"tpl_{int(time.time())}_{len(templates)}"
+    templates.append({"id": new_id, "label": label, "text": text_val})
+    await set_setting("templates", json.dumps(templates, ensure_ascii=False))
+
+
+async def remove_template(index):
+    templates = await get_templates()
+    if 0 <= index < len(templates):
+        templates.pop(index)
+        await set_setting("templates", json.dumps(templates, ensure_ascii=False))
+        return True
+    return False
+
+
 async def get_stats():
     async with aiosqlite.connect(DB_PATH) as db:
         stats = {}
@@ -441,29 +738,33 @@ async def export_csv():
 
 # ======================= TUGMALAR =======================
 
-def main_menu_kb():
+def main_menu_kb(lang="uz"):
     b = InlineKeyboardBuilder()
-    b.button(text="💡 Taklif", callback_data="cat:taklif")
-    b.button(text="❓ Murojaat", callback_data="cat:murojaat", style="primary")
-    b.button(text="📢 Reklama", callback_data="cat:reklama")
-    b.button(text="📢 Rasmiy kanallarimiz", callback_data="channels", style="success")
-    b.button(text="📄 Mening murojaatlarim", callback_data="my_tickets")
+    b.button(text=t("btn_taklif", lang), callback_data="cat:taklif", style="success")
+    b.button(text=t("btn_murojaat", lang), callback_data="cat:murojaat", style="primary")
+    b.button(text=t("btn_reklama", lang), callback_data="cat:reklama", style="success")
+    b.button(text=t("btn_channels", lang), callback_data="channels", style="primary")
+    b.button(text=t("btn_my_tickets", lang), callback_data="my_tickets", style="primary")
+    b.button(text=t("btn_language", lang), callback_data="choose_language")
     b.adjust(1)
     return b.as_markup()
 
 
-QUICK_REPLIES = {
-    "thanks": "🙏 Rahmat, xabaringiz uchun!",
-    "review": "🔍 Ko'rib chiqmoqdamiz, tez orada to'liq javob beramiz.",
-    "done": "✅ Muammo hal qilindi. Boshqa savol bo'lsa, yozishingiz mumkin.",
-}
-
-
-def quick_reply_kb(message_id):
+def language_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="🙏 Rahmat", callback_data=f"qreply:{message_id}:thanks", style="success")
-    b.button(text="🔍 Ko'rib chiqamiz", callback_data=f"qreply:{message_id}:review", style="primary")
-    b.button(text="✅ Hal qilindi", callback_data=f"qreply:{message_id}:done", style="success")
+    for code, label in LANG_LABELS.items():
+        b.button(text=label, callback_data=f"setlang:{code}", style="primary")
+    b.button(text="⬅️ Ortga", callback_data="back_to_menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
+async def quick_reply_kb(message_id):
+    templates = await get_templates()
+    b = InlineKeyboardBuilder()
+    styles_cycle = ["success", "primary"]
+    for i, tpl in enumerate(templates):
+        b.button(text=tpl["label"], callback_data=f"qreply:{message_id}:{tpl['id']}", style=styles_cycle[i % 2])
     b.adjust(1)
     return b.as_markup()
 
@@ -476,12 +777,12 @@ def rating_kb(message_id):
     return b.as_markup()
 
 
-async def channels_kb():
+async def channels_kb(lang="uz"):
     channels = await get_channels()
     b = InlineKeyboardBuilder()
     for name, link in channels:
         b.button(text=name, url=link, style="success")
-    b.button(text="⬅️ Ortga", callback_data="back_to_menu")
+    b.button(text=t("back_button", lang), callback_data="back_to_menu", style="primary")
     b.adjust(1)
     return b.as_markup()
 
@@ -509,24 +810,27 @@ def view_reply_kb(message_id):
 
 def admin_main_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Barcha xabarlar", callback_data="adm_list:all")
+    b.button(text="📋 Barcha xabarlar", callback_data="adm_list:all", style="primary")
+    b.button(text="🔵 O'qilmaganlar", callback_data="adm_list:unread", style="danger")
     b.button(text="💡 Takliflar", callback_data="adm_list:taklif")
     b.button(text="❓ Murojaatlar", callback_data="adm_list:murojaat", style="primary")
     b.button(text="📢 Reklamalar", callback_data="adm_list:reklama")
-    b.button(text="🔵 O'qilmaganlar", callback_data="adm_list:unread", style="danger")
-    b.button(text="📊 Statistika", callback_data="adm_stats")
-    b.button(text="📤 Eksport (CSV)", callback_data="adm_export")
+    b.button(text="📊 Statistika", callback_data="adm_stats", style="primary")
+    b.button(text="📤 Eksport (CSV)", callback_data="adm_export", style="success")
+    b.button(text="📣 Xabar yuborish", callback_data="adm_broadcast", style="success")
+    b.button(text="🗂 Tayyor javoblar", callback_data="adm_templates", style="primary")
     b.button(text="🚫 Bloklangan foydalanuvchilar", callback_data="adm_blocked", style="danger")
     b.button(text="📢 Kanallarni boshqarish", callback_data="adm_channels", style="success")
-    b.button(text="⚙️ Sozlamalar", callback_data="adm_settings")
-    b.adjust(1)
+    b.button(text="⚙️ Sozlamalar", callback_data="adm_settings", style="primary")
+    b.adjust(2)
     return b.as_markup()
 
 
 def ticket_admin_kb(ticket):
     tid = ticket["id"]
     b = InlineKeyboardBuilder()
-    b.button(text="👤 Foydalanuvchi tarixi", callback_data=f"adm_history:{ticket['user_id']}")
+    b.button(text="👤 Foydalanuvchi tarixi", callback_data=f"adm_history:{ticket['user_id']}", style="primary")
+    b.button(text="🤖 AI xulosa", callback_data=f"adm_aisum:{tid}", style="primary")
     if ticket["tag"] == "hal qilindi":
         b.button(text="⏳ Kutilmoqda deb belgilash", callback_data=f"adm_tag:{tid}:kutilmoqda")
     else:
@@ -545,14 +849,37 @@ def channels_manage_kb(channels):
     b = InlineKeyboardBuilder()
     for idx, (name, link) in enumerate(channels):
         b.button(text=f"🗑 {name}", callback_data=f"adm_delchannel:{idx}", style="danger")
-    b.button(text="⬅️ Ortga", callback_data="adm_back")
+    b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
+    b.adjust(1)
+    return b.as_markup()
+
+
+async def templates_manage_kb(templates):
+    b = InlineKeyboardBuilder()
+    for idx, tpl in enumerate(templates):
+        b.button(text=f"🗑 {tpl['label']}", callback_data=f"adm_deltemplate:{idx}", style="danger")
+    b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
     b.adjust(1)
     return b.as_markup()
 
 
 def settings_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Ortga", callback_data="adm_back")
+    b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def cancel_kb(lang="uz", callback="cancel_category"):
+    b = InlineKeyboardBuilder()
+    b.button(text=t("cancel_button", lang), callback_data=callback, style="danger")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_cancel_kb():
+    b = InlineKeyboardBuilder()
+    b.button(text="❌ Bekor qilish", callback_data="adm_cancel_pending", style="danger")
     b.adjust(1)
     return b.as_markup()
 
@@ -560,22 +887,6 @@ def settings_kb():
 # ======================= FOYDALANUVCHI QISMI =======================
 
 user_router = Router()
-
-WELCOME_TEXT = (
-    "📢 <b>Taklif, Murojaat va Reklama</b>\n\n"
-    "Assalomu alaykum!\n\n"
-    "Anifilm.uz jamoasi sizning har bir fikr va taklifingizni qadrlaydi.\n\n"
-    "💡 Takliflaringiz orqali saytimizni yanada rivojlantirishga yordam bera olasiz.\n"
-    "❓ Savol yoki murojaatlaringiz bo'lsa, administrator bilan bog'laning.\n"
-    "📢 Reklama, hamkorlik yoki biznes takliflari bo'yicha ham murojaat qilishingiz mumkin.\n\n"
-    "📝 Quyidagi bo'limlardan birini tanlang."
-)
-
-CATEGORY_PROMPT = {
-    "taklif": "💡 Taklifingizni yozib qoldiring (matn, rasm yoki video yuborishingiz mumkin).",
-    "murojaat": "❓ Murojaatingizni yozib qoldiring (matn, rasm yoki video yuborishingiz mumkin).",
-    "reklama": "📢 Reklama/hamkorlik taklifingizni yozib qoldiring (matn, rasm yoki video yuborishingiz mumkin).",
-}
 
 user_pending_category = {}
 
@@ -624,36 +935,55 @@ async def cmd_start(message: Message):
     if await is_blocked(message.from_user.id):
         await message.answer("🚫 Siz botdan foydalanish huquqidan mahrum qilingansiz.")
         return
-    await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+    lang = await get_user_language(message.from_user.id)
+    await message.answer(t("welcome", lang), reply_markup=main_menu_kb(lang))
 
 
 @user_router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(call: CallbackQuery):
-    await call.message.edit_text(WELCOME_TEXT, reply_markup=main_menu_kb())
+    lang = await get_user_language(call.from_user.id)
+    await call.message.edit_text(t("welcome", lang), reply_markup=main_menu_kb(lang))
+    await call.answer()
+
+
+@user_router.callback_query(F.data == "choose_language")
+async def choose_language_cb(call: CallbackQuery):
+    lang = await get_user_language(call.from_user.id)
+    await call.message.edit_text(t("choose_language", lang), reply_markup=language_kb())
+    await call.answer()
+
+
+@user_router.callback_query(F.data.startswith("setlang:"))
+async def set_language_cb(call: CallbackQuery):
+    lang = call.data.split(":")[1]
+    await set_user_language(call.from_user.id, lang)
+    await call.message.edit_text(t("language_set", lang), reply_markup=main_menu_kb(lang))
     await call.answer()
 
 
 @user_router.callback_query(F.data == "channels")
 async def show_channels(call: CallbackQuery):
-    text = "📢 <b>Rasmiy kanallarimiz:</b>\n\nQuyidagi tugmalar orqali kanallarimizga o'ting."
-    await call.message.edit_text(text, reply_markup=await channels_kb())
+    lang = await get_user_language(call.from_user.id)
+    text = t("channels_header", lang)
+    await call.message.edit_text(text, reply_markup=await channels_kb(lang))
     await call.answer()
 
 
 @user_router.callback_query(F.data == "my_tickets")
 async def my_tickets(call: CallbackQuery):
+    lang = await get_user_language(call.from_user.id)
     tickets = await get_user_tickets(call.from_user.id)
     if not tickets:
-        text = "📄 Sizda hali murojaatlar yo'q."
+        text = t("no_tickets", lang)
     else:
-        lines = ["📄 <b>Mening murojaatlarim:</b>\n"]
-        for t in tickets:
-            tag_mark = "✅" if t["tag"] == "hal qilindi" else "⏳"
-            cat = CATEGORIES.get(t["category"], t["category"])
-            lines.append(f"{tag_mark} #{t['id']} — {cat}")
+        lines = [t("my_tickets_header", lang)]
+        for tt in tickets:
+            tag_mark = "✅" if tt["tag"] == "hal qilindi" else "⏳"
+            cat = CATEGORIES.get(tt["category"], tt["category"])
+            lines.append(f"{tag_mark} #{tt['id']} — {cat}")
         text = "\n".join(lines)
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Ortga", callback_data="back_to_menu")
+    b.button(text=t("back_button", lang), callback_data="back_to_menu", style="primary")
     b.adjust(1)
     await call.message.edit_text(text, reply_markup=b.as_markup())
     await call.answer()
@@ -663,8 +993,21 @@ async def my_tickets(call: CallbackQuery):
 async def choose_category(call: CallbackQuery):
     category = call.data.split(":")[1]
     user_pending_category[call.from_user.id] = category
-    await call.message.answer(CATEGORY_PROMPT[category])
+    lang = await get_user_language(call.from_user.id)
+    prompt = t(f"prompt_{category}", lang)
+    await call.message.answer(prompt, reply_markup=cancel_kb(lang, "cancel_category"))
     await call.answer()
+
+
+@user_router.callback_query(F.data == "cancel_category")
+async def cancel_category_cb(call: CallbackQuery):
+    user_pending_category.pop(call.from_user.id, None)
+    lang = await get_user_language(call.from_user.id)
+    try:
+        await call.message.edit_text(t("welcome", lang), reply_markup=main_menu_kb(lang))
+    except Exception:
+        await call.message.answer(t("welcome", lang), reply_markup=main_menu_kb(lang))
+    await call.answer("Bekor qilindi")
 
 
 @user_router.message(F.text | F.photo | F.video | F.document)
@@ -674,23 +1017,24 @@ async def handle_user_message(message: Message):
         return
 
     await get_or_create_user(user.id, user.username, user.full_name)
+    lang = await get_user_language(user.id)
 
     if await is_blocked(user.id):
-        await message.answer("🚫 Siz botdan foydalanish huquqidan mahrum qilingansiz.")
+        await message.answer(t("blocked", lang))
         return
 
     if not await check_flood(user.id):
-        await message.answer("⏳ Siz juda tez-tez xabar yuboryapsiz. Iltimos, biroz kuting.")
+        await message.answer(t("flood_msg", lang))
         return
 
     text = message.text or message.caption
 
     if contains_banned_words(text):
-        await message.answer("⚠️ Xabaringizda taqiqlangan so'zlar aniqlandi. Iltimos, xabaringizni tahrirlab qayta yuboring.")
+        await message.answer(t("banned_msg", lang))
         return
 
     if text and await check_duplicate(user.id, text):
-        await message.answer("📵 Siz shu xabarni allaqachon yubordingiz. Iltimos, kuting, tez orada javob beramiz.")
+        await message.answer(t("duplicate_msg", lang))
         return
 
     faq_answer = match_faq(text)
@@ -701,10 +1045,14 @@ async def handle_user_message(message: Message):
     if category:
         ticket_id = await create_ticket(user.id, category)
         ticket = await get_ticket(ticket_id)
+        assigned_admin = await get_next_admin()
+        if assigned_admin:
+            await claim_ticket(ticket_id, assigned_admin)
+            ticket = await get_ticket(ticket_id)
     elif ticket:
         ticket_id = ticket["id"]
     else:
-        await message.answer("Iltimos, avval bo'lim tanlang:", reply_markup=main_menu_kb())
+        await message.answer(t("choose_category_first", lang), reply_markup=main_menu_kb(lang))
         return
 
     if message.text:
@@ -733,11 +1081,15 @@ async def handle_user_message(message: Message):
     working = await is_within_working_hours()
     preview = make_preview(content_type, text_val)
     silent = not working
+    assigned_to = ticket.get("claimed_by")
 
     for admin_id in ADMIN_IDS:
+        header_for_admin = header
+        if assigned_to:
+            header_for_admin += "\n🎯 Sizga biriktirildi!" if admin_id == assigned_to else "\n👤 Boshqa adminga biriktirilgan"
         try:
             await message.bot.send_message(
-                admin_id, header, reply_markup=claim_kb(ticket_id), disable_notification=silent
+                admin_id, header_for_admin, reply_markup=claim_kb(ticket_id), disable_notification=silent
             )
             await message.bot.send_message(
                 admin_id,
@@ -748,17 +1100,29 @@ async def handle_user_message(message: Message):
         except Exception:
             continue
 
+    ai_answer = None
+    if not faq_answer and text:
+        system_instruction = (
+            "Siz Anifilm.uz sayti uchun mijozlarni qo'llab-quvvatlash yordamchisisiz. "
+            f"Foydalanuvchiga qisqa (2-3 gap), do'stona javob bering. Javobni ushbu til kodida yozing: {lang}. "
+            "Agar aniq javob bera olmasangiz, tez orada admin javob berishini bildiring."
+        )
+        ai_answer = await call_gemini(text, system_instruction)
+
     if faq_answer:
         await message.answer(faq_answer)
     else:
-        confirm = "✅ Xabaringiz qabul qilindi, tez orada javob beramiz."
+        confirm = t("confirm_received", lang)
         if not working:
-            confirm += "\n\n🕐 Hozir ish vaqtidan tashqari, shuning uchun javob berish biroz kechikishi mumkin."
+            confirm += t("after_hours_add", lang)
         await message.answer(confirm)
+        if ai_answer:
+            await message.answer(f"{t('ai_prefix', lang)}\n\n{ai_answer}")
 
 
 @user_router.callback_query(F.data.startswith("reveal_reply:"))
 async def user_reveal_reply(call: CallbackQuery):
+    lang = await get_user_language(call.from_user.id)
     message_id = int(call.data.split(":")[1])
     msg = await get_message(message_id)
     if not msg:
@@ -780,7 +1144,7 @@ async def user_reveal_reply(call: CallbackQuery):
         pass
 
     try:
-        await call.message.edit_text("✅ Javob ochildi (yuqorida).")
+        await call.message.edit_text(t("reveal_opened", lang))
     except Exception:
         pass
 
@@ -799,7 +1163,7 @@ async def user_reveal_reply(call: CallbackQuery):
         try:
             await call.bot.send_message(
                 call.from_user.id,
-                "Javobdan mamnunmisiz? Bahoni tanlang:",
+                t("rating_prompt", lang),
                 reply_markup=rating_kb(message_id)
             )
         except Exception:
@@ -809,6 +1173,7 @@ async def user_reveal_reply(call: CallbackQuery):
 
 @user_router.callback_query(F.data.startswith("rate:"))
 async def user_rate(call: CallbackQuery):
+    lang = await get_user_language(call.from_user.id)
     _, message_id, score = call.data.split(":")
     message_id, score = int(message_id), int(score)
     await set_rating(message_id, score)
@@ -825,7 +1190,7 @@ async def user_rate(call: CallbackQuery):
             except Exception:
                 pass
     try:
-        await call.message.edit_text(f"Rahmat! Siz {score}/5 baho berdingiz. ⭐")
+        await call.message.edit_text(t("rating_thanks", lang, score=score))
     except Exception:
         pass
     await call.answer()
@@ -835,17 +1200,20 @@ async def user_rate(call: CallbackQuery):
 
 admin_router = Router()
 
+admin_pending = {}
+broadcast_pending_text = {}
+
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 
-def ticket_summary_line(t):
-    unread_mark = "🔵" if t.get("unread", 0) > 0 else "🟢"
-    pin_mark = "📌 " if t.get("pinned") else ""
-    tag_mark = "✅" if t.get("tag") == "hal qilindi" else "⏳"
-    username = f"@{t['username']}" if t.get("username") else t.get("full_name", "?")
-    return f"{pin_mark}{unread_mark} {tag_mark} #{t['id']} — {username} ({CATEGORIES.get(t['category'], t['category'])})"
+def ticket_summary_line(t_dict):
+    unread_mark = "🔵" if t_dict.get("unread", 0) > 0 else "🟢"
+    pin_mark = "📌 " if t_dict.get("pinned") else ""
+    tag_mark = "✅" if t_dict.get("tag") == "hal qilindi" else "⏳"
+    username = f"@{t_dict['username']}" if t_dict.get("username") else t_dict.get("full_name", "?")
+    return f"{pin_mark}{unread_mark} {tag_mark} #{t_dict['id']} — {username} ({CATEGORIES.get(t_dict['category'], t_dict['category'])})"
 
 
 @admin_router.message(Command("admin"))
@@ -879,7 +1247,7 @@ async def adm_list(call: CallbackQuery):
         await call.message.edit_text("Hozircha xabar yo'q.", reply_markup=admin_main_kb())
         return await call.answer()
 
-    text = "📋 <b>Xabarlar ro'yxati</b>\n\n" + "\n".join(ticket_summary_line(t) for t in tickets)
+    text = "📋 <b>Xabarlar ro'yxati</b>\n\n" + "\n".join(ticket_summary_line(tt) for tt in tickets)
     text += "\n\nTicket'ni ochish uchun: /ticket ID"
     await call.message.edit_text(text, reply_markup=admin_main_kb())
     await call.answer()
@@ -907,6 +1275,22 @@ async def open_ticket(message: Message):
     await message.answer("\n".join(lines), reply_markup=ticket_admin_kb(ticket))
 
 
+@admin_router.callback_query(F.data.startswith("adm_aisum:"))
+async def adm_ai_summary(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    ticket_id = int(call.data.split(":")[1])
+    await call.answer("AI xulosa tayyorlanmoqda...")
+    if not GEMINI_API_KEY:
+        await call.message.answer("❌ GEMINI_API_KEY sozlanmagan, AI xulosa ishlamaydi.")
+        return
+    summary = await ai_summarize_ticket(ticket_id)
+    if summary:
+        await call.message.answer(f"🤖 <b>AI xulosa</b> (Ticket #{ticket_id}):\n\n{summary}")
+    else:
+        await call.message.answer("❌ AI xulosa olishda xatolik yuz berdi.")
+
+
 @admin_router.callback_query(F.data.startswith("adm_history:"))
 async def adm_history(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -917,8 +1301,8 @@ async def adm_history(call: CallbackQuery):
         await call.answer("Tarix topilmadi.", show_alert=True)
         return
     lines = [f"👤 Foydalanuvchi <code>{user_id}</code> tarixi:\n"]
-    for t in tickets:
-        lines.append(ticket_summary_line(t))
+    for tt in tickets:
+        lines.append(ticket_summary_line(tt))
     await call.message.answer("\n".join(lines))
     await call.answer()
 
@@ -1036,6 +1420,97 @@ async def addchannel_cmd(message: Message):
     await message.answer(f"✅ Kanal qo'shildi: 🟢 {name} — {link}")
 
 
+@admin_router.callback_query(F.data == "adm_templates")
+async def adm_templates(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    templates = await get_templates()
+    lines = "\n".join(f"🟢 {tpl['label']} — {tpl['text']}" for tpl in templates) if templates else "Hozircha shablon yo'q."
+    text = (
+        f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\n"
+        f"➕ Qo'shish: <code>/addtemplate Nomi | Matni</code>\n"
+        f"🗑 O'chirish uchun pastdagi tugmani bosing."
+    )
+    await call.message.edit_text(text, reply_markup=await templates_manage_kb(templates))
+    await call.answer()
+
+
+@admin_router.callback_query(F.data.startswith("adm_deltemplate:"))
+async def adm_deltemplate(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    idx = int(call.data.split(":")[1])
+    ok = await remove_template(idx)
+    templates = await get_templates()
+    await call.answer("O'chirildi ✅" if ok else "Topilmadi")
+    lines = "\n".join(f"🟢 {tpl['label']} — {tpl['text']}" for tpl in templates) if templates else "Hozircha shablon yo'q."
+    text = (
+        f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\n"
+        f"➕ Qo'shish: <code>/addtemplate Nomi | Matni</code>\n"
+        f"🗑 O'chirish uchun pastdagi tugmani bosing."
+    )
+    await call.message.edit_text(text, reply_markup=await templates_manage_kb(templates))
+
+
+@admin_router.message(Command("addtemplate"))
+async def addtemplate_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    raw = message.text.replace("/addtemplate", "", 1).strip()
+    if "|" not in raw:
+        await message.answer("Foydalanish: /addtemplate Nomi | Matni")
+        return
+    label, text_val = raw.split("|", 1)
+    label, text_val = label.strip(), text_val.strip()
+    if not label or not text_val:
+        await message.answer("Foydalanish: /addtemplate Nomi | Matni")
+        return
+    await add_template(label, text_val)
+    await message.answer(f"✅ Shablon qo'shildi: {label}")
+
+
+@admin_router.callback_query(F.data == "adm_broadcast")
+async def adm_broadcast_start(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    admin_pending[call.from_user.id] = "broadcast"
+    await call.message.answer(
+        "📣 Barcha foydalanuvchilarga yuboriladigan xabar matnini kiriting:",
+        reply_markup=admin_cancel_kb()
+    )
+    await call.answer()
+
+
+@admin_router.callback_query(F.data == "adm_broadcast_send")
+async def adm_broadcast_send(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    text_val = broadcast_pending_text.pop(call.from_user.id, None)
+    if not text_val:
+        await call.answer("Xabar topilmadi")
+        return
+    await call.answer("Yuborilmoqda...")
+    user_ids = await get_all_active_user_ids()
+    sent, failed = 0, 0
+    for uid in user_ids:
+        try:
+            await call.bot.send_message(uid, text_val)
+            sent += 1
+        except Exception:
+            failed += 1
+    await call.message.answer(f"📣 Xabar yuborildi.\n✅ Yuborildi: {sent}\n❌ Xato: {failed}")
+
+
+@admin_router.callback_query(F.data == "adm_cancel_pending")
+async def adm_cancel_pending(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    admin_pending.pop(call.from_user.id, None)
+    broadcast_pending_text.pop(call.from_user.id, None)
+    await call.answer("Bekor qilindi")
+    await call.message.edit_text("🛠 <b>Admin panel</b>", reply_markup=admin_main_kb())
+
+
 @admin_router.callback_query(F.data.startswith("claim:"))
 async def claim_ticket_cb(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1078,7 +1553,7 @@ async def admin_view_msg(call: CallbackQuery):
             await call.bot.send_message(
                 admin_id,
                 "👆 Javob berish uchun shu xabarga <b>Reply</b> qiling,\nyoki tayyor javoblardan birini tanlang:",
-                reply_markup=quick_reply_kb(message_id)
+                reply_markup=await quick_reply_kb(message_id)
             )
         except Exception:
             pass
@@ -1105,10 +1580,12 @@ async def admin_quick_reply(call: CallbackQuery):
         return await call.answer()
     _, message_id, key = call.data.split(":")
     message_id = int(message_id)
-    text_val = QUICK_REPLIES.get(key)
-    if not text_val:
+    templates = await get_templates()
+    tpl = next((x for x in templates if x["id"] == key), None)
+    if not tpl:
         await call.answer("Noma'lum shablon")
         return
+    text_val = tpl["text"]
     msg = await get_message(message_id)
     if not msg:
         await call.answer("Xabar topilmadi")
@@ -1118,10 +1595,11 @@ async def admin_quick_reply(call: CallbackQuery):
         await call.answer("Ticket topilmadi")
         return
     reply_msg_id = await add_message(ticket["id"], "admin", "text", text_val, None, admin_id=call.from_user.id)
+    lang = await get_user_language(ticket["user_id"])
     try:
         await call.bot.send_message(
             ticket["user_id"],
-            "📩 Sizga javob keldi. Ko'rish uchun tugmani bosing.",
+            t("reply_notify", lang),
             reply_markup=view_reply_kb(reply_msg_id)
         )
         await call.answer("Yuborildi ✅")
@@ -1166,12 +1644,24 @@ async def adm_settings(call: CallbackQuery):
     start = await get_setting("working_hours_start", DEFAULT_WORKING_HOURS_START)
     end = await get_setting("working_hours_end", DEFAULT_WORKING_HOURS_END)
     status_label = "yoqilgan" if enabled == "1" else "o'chirilgan"
+    limit_msgs, limit_secs, dup_window = await get_flood_settings()
+    reminder_minutes = await get_setting("reminder_minutes", "30")
+    auto_assign = await get_setting("auto_assign_enabled", "1")
+    auto_assign_label = "yoqilgan" if auto_assign == "1" else "o'chirilgan"
     text = (
         f"⚙️ <b>Sozlamalar</b>\n\n"
         f"🕐 Ish vaqti: {status_label}\n"
-        f"Boshlanishi: {start}\nTugashi: {end}\n\n"
-        f"O'zgartirish uchun: /sethours 09:00 18:00\n"
-        f"Ish vaqtini o'chirish: /hoursoff\nYoqish: /hourson"
+        f"Boshlanishi: {start}\nTugashi: {end}\n"
+        f"O'zgartirish: /sethours 09:00 18:00\n"
+        f"Ish vaqtini o'chirish: /hoursoff | Yoqish: /hourson\n\n"
+        f"🚦 Rate-limit: {limit_msgs} xabar / {limit_secs} soniya\n"
+        f"Dublikat oynasi: {dup_window} soniya\n"
+        f"O'zgartirish: /setflood {limit_msgs} {limit_secs} {dup_window}\n\n"
+        f"⏰ Eslatma vaqti: {reminder_minutes} daqiqa (javobsiz qolsa)\n"
+        f"O'zgartirish: /setreminder 30\n\n"
+        f"🎯 Avto-taqsimlash: {auto_assign_label}\n"
+        f"O'zgartirish: /autoassign on yoki /autoassign off\n\n"
+        f"🤖 Gemini AI: {'sozlangan ✅' if GEMINI_API_KEY else 'sozlanmagan ❌ (GEMINI_API_KEY kerak)'}"
     )
     await call.message.edit_text(text, reply_markup=settings_kb())
     await call.answer()
@@ -1206,6 +1696,46 @@ async def hours_on(message: Message):
     await message.answer("✅ Ish vaqti tekshiruvi yoqildi.")
 
 
+@admin_router.message(Command("setflood"))
+async def set_flood_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) != 4 or not all(p.isdigit() for p in parts[1:]):
+        await message.answer("Foydalanish: /setflood 5 60 30\n(xabar_soni tekshiruv_soniya dublikat_soniya)")
+        return
+    await set_setting("flood_limit_messages", parts[1])
+    await set_setting("flood_limit_seconds", parts[2])
+    await set_setting("duplicate_window_seconds", parts[3])
+    await message.answer(
+        f"✅ Rate-limit yangilandi: {parts[1]} xabar / {parts[2]} soniya, dublikat oynasi: {parts[3]} soniya"
+    )
+
+
+@admin_router.message(Command("setreminder"))
+async def set_reminder_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Foydalanish: /setreminder 30")
+        return
+    await set_setting("reminder_minutes", parts[1])
+    await message.answer(f"✅ Eslatma vaqti: {parts[1]} daqiqa")
+
+
+@admin_router.message(Command("autoassign"))
+async def autoassign_cmd(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) != 2 or parts[1] not in ("on", "off"):
+        await message.answer("Foydalanish: /autoassign on yoki /autoassign off")
+        return
+    await set_setting("auto_assign_enabled", "1" if parts[1] == "on" else "0")
+    await message.answer(f"✅ Avto-taqsimlash: {'yoqildi' if parts[1] == 'on' else 'o‘chirildi'}")
+
+
 @admin_router.message(Command("search"))
 async def search_cmd(message: Message):
     if not is_admin(message.from_user.id):
@@ -1218,7 +1748,7 @@ async def search_cmd(message: Message):
     if not results:
         await message.answer("Hech narsa topilmadi.")
         return
-    lines = ["🔍 <b>Qidiruv natijalari:</b>\n"] + [ticket_summary_line(t) for t in results]
+    lines = ["🔍 <b>Qidiruv natijalari:</b>\n"] + [ticket_summary_line(tt) for tt in results]
     await message.answer("\n".join(lines))
 
 
@@ -1279,16 +1809,50 @@ async def handle_admin_reply(message: Message):
         ticket_id, "admin", content_type, text_val, file_id, admin_id=message.from_user.id
     )
 
+    lang = await get_user_language(ticket["user_id"])
     reply_kb = view_reply_kb(reply_msg_id)
     try:
         await message.bot.send_message(
             ticket["user_id"],
-            "📩 Sizga javob keldi. Ko'rish uchun tugmani bosing.",
+            t("reply_notify", lang),
             reply_markup=reply_kb
         )
         await message.answer("✅ Javobingiz foydalanuvchiga yuborildi.")
     except Exception as e:
         await message.answer(f"❌ Yuborib bo'lmadi: {e}")
+
+
+@admin_router.message(F.text)
+async def handle_admin_plain_text(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    if not message.text or message.text.startswith("/"):
+        return
+    pending = admin_pending.get(message.from_user.id)
+    if pending == "broadcast":
+        admin_pending.pop(message.from_user.id, None)
+        broadcast_pending_text[message.from_user.id] = message.text
+        confirm_kb = InlineKeyboardBuilder()
+        confirm_kb.button(text="✅ Yuborish", callback_data="adm_broadcast_send", style="success")
+        confirm_kb.button(text="❌ Bekor qilish", callback_data="adm_cancel_pending", style="danger")
+        confirm_kb.adjust(1)
+        await message.answer(
+            f"Quyidagi xabar barcha foydalanuvchilarga yuboriladi:\n\n{message.text}\n\nTasdiqlaysizmi?",
+            reply_markup=confirm_kb.as_markup()
+        )
+
+
+# ======================= XATOLIKLAR =======================
+
+async def global_error_handler(event: ErrorEvent, bot: Bot):
+    logging.exception("Botda xatolik yuz berdi", exc_info=event.exception)
+    error_text = f"❌ <b>Botda xatolik</b>\n<code>{type(event.exception).__name__}: {str(event.exception)[:500]}</code>"
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, error_text)
+        except Exception:
+            continue
+    return True
 
 
 # ======================= ISHGA TUSHIRISH =======================
@@ -1340,10 +1904,55 @@ async def weekly_report_task(bot: Bot):
             continue
 
 
+async def reminder_task(bot: Bot):
+    while True:
+        await asyncio.sleep(5 * 60)
+        try:
+            minutes = int(await get_setting("reminder_minutes", "30"))
+            threshold = int(time.time()) - minutes * 60
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute("""
+                    SELECT t.*, u.username, u.full_name FROM tickets t
+                    JOIN users u ON u.user_id = t.user_id
+                    WHERE t.status='open'
+                """)
+                rows = await cur.fetchall()
+
+            for row in rows:
+                ticket = dict(row)
+                history = await get_ticket_history(ticket["id"])
+                if not history:
+                    continue
+                last = history[-1]
+                if last["sender"] != "user":
+                    continue
+                if last["created_at"] > threshold:
+                    continue
+                if ticket.get("last_reminder_at") and ticket["last_reminder_at"] > last["created_at"]:
+                    continue
+
+                summary_line = ticket_summary_line(ticket)
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await bot.send_message(admin_id, f"⏰ Eslatma: javob kutilmoqda!\n{summary_line}")
+                    except Exception:
+                        continue
+
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute(
+                        "UPDATE tickets SET last_reminder_at=? WHERE id=?", (int(time.time()), ticket["id"])
+                    )
+                    await db.commit()
+        except Exception:
+            continue
+
+
 async def on_startup(bot: Bot):
     await init_db()
     asyncio.create_task(daily_backup_task(bot))
     asyncio.create_task(weekly_report_task(bot))
+    asyncio.create_task(reminder_task(bot))
     logging.info("Baza tayyor, bot ishga tushmoqda...")
 
 
@@ -1357,6 +1966,7 @@ async def run_bot():
     dp.include_router(admin_router)
     dp.include_router(user_router)
 
+    dp.errors.register(global_error_handler)
     dp.startup.register(on_startup)
 
     await bot.delete_webhook(drop_pending_updates=True)
