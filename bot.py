@@ -390,6 +390,14 @@ async def set_blocked(user_id, blocked):
         await db.commit()
 
 
+async def get_blocked_users():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT user_id, username, full_name FROM users WHERE is_blocked=1")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_all_active_user_ids():
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT user_id FROM users WHERE is_blocked=0")
@@ -746,7 +754,7 @@ def main_menu_kb(lang="uz"):
     b.button(text=t("btn_channels", lang), callback_data="channels", style="primary")
     b.button(text=t("btn_my_tickets", lang), callback_data="my_tickets", style="primary")
     b.button(text=t("btn_language", lang), callback_data="choose_language")
-    b.adjust(1)
+    b.adjust(2, 2, 2)
     return b.as_markup()
 
 
@@ -810,19 +818,22 @@ def view_reply_kb(message_id):
 
 def admin_main_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Barcha xabarlar", callback_data="adm_list:all", style="primary")
-    b.button(text="🔵 O'qilmaganlar", callback_data="adm_list:unread", style="danger")
-    b.button(text="💡 Takliflar", callback_data="adm_list:taklif")
-    b.button(text="❓ Murojaatlar", callback_data="adm_list:murojaat", style="primary")
-    b.button(text="📢 Reklamalar", callback_data="adm_list:reklama")
+    b.button(text="📋 Barcha", callback_data="adm_list:all", style="primary")
+    b.button(text="🔵 O'qilmagan", callback_data="adm_list:unread", style="danger")
+    b.button(text="💡 Taklif", callback_data="adm_list:taklif")
+    b.button(text="❓ Murojaat", callback_data="adm_list:murojaat", style="primary")
+    b.button(text="📢 Reklama", callback_data="adm_list:reklama")
     b.button(text="📊 Statistika", callback_data="adm_stats", style="primary")
-    b.button(text="📤 Eksport (CSV)", callback_data="adm_export", style="success")
-    b.button(text="📣 Xabar yuborish", callback_data="adm_broadcast", style="success")
-    b.button(text="🗂 Tayyor javoblar", callback_data="adm_templates", style="primary")
-    b.button(text="🚫 Bloklangan foydalanuvchilar", callback_data="adm_blocked", style="danger")
-    b.button(text="📢 Kanallarni boshqarish", callback_data="adm_channels", style="success")
+    b.button(text="📤 Eksport", callback_data="adm_export", style="success")
+    b.button(text="🔍 Qidiruv", callback_data="adm_search", style="primary")
+    b.button(text="🏆 TOP", callback_data="adm_topusers")
+    b.button(text="📣 Xabar", callback_data="adm_broadcast", style="success")
+    b.button(text="🗂 Shablonlar", callback_data="adm_templates", style="primary")
+    b.button(text="🚫 Bloklangan", callback_data="adm_blocked", style="danger")
+    b.button(text="📢 Kanallar", callback_data="adm_channels", style="success")
+    b.button(text="🔄 Backup", callback_data="adm_backup")
     b.button(text="⚙️ Sozlamalar", callback_data="adm_settings", style="primary")
-    b.adjust(2)
+    b.adjust(2, 3, 2, 2, 2, 2, 2)
     return b.as_markup()
 
 
@@ -849,6 +860,7 @@ def channels_manage_kb(channels):
     b = InlineKeyboardBuilder()
     for idx, (name, link) in enumerate(channels):
         b.button(text=f"🗑 {name}", callback_data=f"adm_delchannel:{idx}", style="danger")
+    b.button(text="➕ Kanal qo'shish", callback_data="adm_addchannel", style="success")
     b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
     b.adjust(1)
     return b.as_markup()
@@ -858,15 +870,48 @@ async def templates_manage_kb(templates):
     b = InlineKeyboardBuilder()
     for idx, tpl in enumerate(templates):
         b.button(text=f"🗑 {tpl['label']}", callback_data=f"adm_deltemplate:{idx}", style="danger")
+    b.button(text="➕ Shablon qo'shish", callback_data="adm_addtemplate", style="success")
     b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
     b.adjust(1)
     return b.as_markup()
 
 
-def settings_kb():
+def blocked_manage_kb(users):
     b = InlineKeyboardBuilder()
+    for u in users:
+        label = f"@{u['username']}" if u.get("username") else (u.get("full_name") or str(u["user_id"]))
+        b.button(text=f"🔓 {label}", callback_data=f"adm_unblock:{u['user_id']}", style="success")
     b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
     b.adjust(1)
+    return b.as_markup()
+
+
+def tickets_list_kb(tickets):
+    b = InlineKeyboardBuilder()
+    for tt in tickets:
+        b.button(text=f"#{tt['id']}", callback_data=f"adm_open:{tt['id']}")
+    b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
+    b.adjust(5)
+    return b.as_markup()
+
+
+def settings_kb(hours_enabled, auto_assign_enabled):
+    b = InlineKeyboardBuilder()
+    b.button(
+        text=("🕐 Ish vaqtini o'chirish" if hours_enabled else "🕐 Ish vaqtini yoqish"),
+        callback_data="adm_toggle_hours",
+        style="danger" if hours_enabled else "success",
+    )
+    b.button(text="✏️ Vaqtni o'zgartirish", callback_data="adm_sethours", style="primary")
+    b.button(
+        text=("🎯 Avto-taqsimlashni o'chirish" if auto_assign_enabled else "🎯 Avto-taqsimlashni yoqish"),
+        callback_data="adm_toggle_autoassign",
+        style="danger" if auto_assign_enabled else "success",
+    )
+    b.button(text="🚦 Rate-limit sozlash", callback_data="adm_setflood", style="primary")
+    b.button(text="⏰ Eslatma vaqti", callback_data="adm_setreminder", style="primary")
+    b.button(text="⬅️ Ortga", callback_data="adm_back", style="primary")
+    b.adjust(2, 2, 1, 1)
     return b.as_markup()
 
 
@@ -1199,6 +1244,8 @@ async def user_rate(call: CallbackQuery):
 # ======================= ADMIN QISMI =======================
 
 admin_router = Router()
+admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
+admin_router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 admin_pending = {}
 broadcast_pending_text = {}
@@ -1248,23 +1295,17 @@ async def adm_list(call: CallbackQuery):
         return await call.answer()
 
     text = "📋 <b>Xabarlar ro'yxati</b>\n\n" + "\n".join(ticket_summary_line(tt) for tt in tickets)
-    text += "\n\nTicket'ni ochish uchun: /ticket ID"
-    await call.message.edit_text(text, reply_markup=admin_main_kb())
+    text += "\n\nOchish uchun raqamni bosing:"
+    await call.message.edit_text(text, reply_markup=tickets_list_kb(tickets))
     await call.answer()
 
 
-@admin_router.message(Command("ticket"))
-async def open_ticket(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /ticket 5")
-        return
-    ticket_id = int(parts[1])
+@admin_router.callback_query(F.data.startswith("adm_open:"))
+async def adm_open_ticket(call: CallbackQuery):
+    ticket_id = int(call.data.split(":")[1])
     ticket = await get_ticket(ticket_id)
     if not ticket:
-        await message.answer("Bunday ticket topilmadi.")
+        await call.answer("Bunday ticket topilmadi.", show_alert=True)
         return
     history = await get_ticket_history(ticket_id)
     lines = [f"🎫 <b>Ticket #{ticket_id}</b> | {CATEGORIES.get(ticket['category'], ticket['category'])} | {ticket['tag']}\n"]
@@ -1272,7 +1313,8 @@ async def open_ticket(message: Message):
         sender = "👤 Foydalanuvchi" if m["sender"] == "user" else "🛠 Admin"
         content_label = m["text"] if m["text"] else f"[{m['content_type']}]"
         lines.append(f"{sender}: {content_label}")
-    await message.answer("\n".join(lines), reply_markup=ticket_admin_kb(ticket))
+    await call.message.answer("\n".join(lines), reply_markup=ticket_admin_kb(ticket))
+    await call.answer()
 
 
 @admin_router.callback_query(F.data.startswith("adm_aisum:"))
@@ -1345,24 +1387,30 @@ async def adm_block(call: CallbackQuery):
     await call.message.answer(f"🚫 Foydalanuvchi <code>{user_id}</code> bloklandi.")
 
 
-@admin_router.message(Command("unblock"))
-async def unblock_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /unblock 123456789")
-        return
-    await set_blocked(int(parts[1]), False)
-    await message.answer("✅ Blokdan chiqarildi.")
-
-
 @admin_router.callback_query(F.data == "adm_blocked")
 async def adm_blocked_list(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await call.message.answer("🚫 Bloklangan foydalanuvchini blokdan chiqarish uchun:\n/unblock USER_ID")
+    users = await get_blocked_users()
+    text = (
+        "🚫 <b>Bloklangan foydalanuvchilar yo'q.</b>"
+        if not users
+        else "🚫 <b>Bloklangan foydalanuvchilar</b>\n\nBlokdan chiqarish uchun tugmani bosing:"
+    )
+    await call.message.edit_text(text, reply_markup=blocked_manage_kb(users))
     await call.answer()
+
+
+@admin_router.callback_query(F.data.startswith("adm_unblock:"))
+async def adm_unblock(call: CallbackQuery):
+    user_id = int(call.data.split(":")[1])
+    await set_blocked(user_id, False)
+    users = await get_blocked_users()
+    text = (
+        "🚫 <b>Bloklangan foydalanuvchilar yo'q.</b>"
+        if not users
+        else "🚫 <b>Bloklangan foydalanuvchilar</b>\n\nBlokdan chiqarish uchun tugmani bosing:"
+    )
+    await call.message.edit_text(text, reply_markup=blocked_manage_kb(users))
+    await call.answer("Blokdan chiqarildi ✅")
 
 
 @admin_router.callback_query(F.data == "adm_channels")
@@ -1374,19 +1422,13 @@ async def adm_channels(call: CallbackQuery):
         lines = "\n".join(f"🟢 {name} — {link}" for name, link in channels)
     else:
         lines = "Hozircha kanal qo'shilmagan."
-    text = (
-        f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\n"
-        f"➕ Qo'shish: <code>/addchannel Nomi | https://t.me/link</code>\n"
-        f"🗑 O'chirish uchun pastdagi tugmani bosing."
-    )
+    text = f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
     await call.message.edit_text(text, reply_markup=channels_manage_kb(channels))
     await call.answer()
 
 
 @admin_router.callback_query(F.data.startswith("adm_delchannel:"))
 async def adm_delchannel(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
     idx = int(call.data.split(":")[1])
     ok = await remove_channel(idx)
     channels = await get_channels()
@@ -1395,29 +1437,18 @@ async def adm_delchannel(call: CallbackQuery):
     else:
         await call.answer("Topilmadi")
     lines = "\n".join(f"🟢 {name} — {link}" for name, link in channels) if channels else "Hozircha kanal qo'shilmagan."
-    text = (
-        f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\n"
-        f"➕ Qo'shish: <code>/addchannel Nomi | https://t.me/link</code>\n"
-        f"🗑 O'chirish uchun pastdagi tugmani bosing."
-    )
+    text = f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
     await call.message.edit_text(text, reply_markup=channels_manage_kb(channels))
 
 
-@admin_router.message(Command("addchannel"))
-async def addchannel_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.replace("/addchannel", "", 1).strip()
-    if "|" not in raw:
-        await message.answer("Foydalanish: /addchannel Nomi | https://t.me/link")
-        return
-    name, link = raw.split("|", 1)
-    name, link = name.strip(), link.strip()
-    if not name or not link:
-        await message.answer("Foydalanish: /addchannel Nomi | https://t.me/link")
-        return
-    await add_channel(name, link)
-    await message.answer(f"✅ Kanal qo'shildi: 🟢 {name} — {link}")
+@admin_router.callback_query(F.data == "adm_addchannel")
+async def adm_addchannel_start(call: CallbackQuery):
+    admin_pending[call.from_user.id] = "addchannel"
+    await call.message.answer(
+        "➕ Yangi kanal ma'lumotini shu formatda yuboring:\n<code>Nomi | https://t.me/link</code>",
+        reply_markup=admin_cancel_kb()
+    )
+    await call.answer()
 
 
 @admin_router.callback_query(F.data == "adm_templates")
@@ -1426,47 +1457,30 @@ async def adm_templates(call: CallbackQuery):
         return await call.answer()
     templates = await get_templates()
     lines = "\n".join(f"🟢 {tpl['label']} — {tpl['text']}" for tpl in templates) if templates else "Hozircha shablon yo'q."
-    text = (
-        f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\n"
-        f"➕ Qo'shish: <code>/addtemplate Nomi | Matni</code>\n"
-        f"🗑 O'chirish uchun pastdagi tugmani bosing."
-    )
+    text = f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
     await call.message.edit_text(text, reply_markup=await templates_manage_kb(templates))
     await call.answer()
 
 
 @admin_router.callback_query(F.data.startswith("adm_deltemplate:"))
 async def adm_deltemplate(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
     idx = int(call.data.split(":")[1])
     ok = await remove_template(idx)
     templates = await get_templates()
     await call.answer("O'chirildi ✅" if ok else "Topilmadi")
     lines = "\n".join(f"🟢 {tpl['label']} — {tpl['text']}" for tpl in templates) if templates else "Hozircha shablon yo'q."
-    text = (
-        f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\n"
-        f"➕ Qo'shish: <code>/addtemplate Nomi | Matni</code>\n"
-        f"🗑 O'chirish uchun pastdagi tugmani bosing."
-    )
+    text = f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
     await call.message.edit_text(text, reply_markup=await templates_manage_kb(templates))
 
 
-@admin_router.message(Command("addtemplate"))
-async def addtemplate_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.replace("/addtemplate", "", 1).strip()
-    if "|" not in raw:
-        await message.answer("Foydalanish: /addtemplate Nomi | Matni")
-        return
-    label, text_val = raw.split("|", 1)
-    label, text_val = label.strip(), text_val.strip()
-    if not label or not text_val:
-        await message.answer("Foydalanish: /addtemplate Nomi | Matni")
-        return
-    await add_template(label, text_val)
-    await message.answer(f"✅ Shablon qo'shildi: {label}")
+@admin_router.callback_query(F.data == "adm_addtemplate")
+async def adm_addtemplate_start(call: CallbackQuery):
+    admin_pending[call.from_user.id] = "addtemplate"
+    await call.message.answer(
+        "➕ Yangi shablonni shu formatda yuboring:\n<code>Nomi | Matni</code>",
+        reply_markup=admin_cancel_kb()
+    )
+    await call.answer()
 
 
 @admin_router.callback_query(F.data == "adm_broadcast")
@@ -1636,147 +1650,115 @@ async def adm_export(call: CallbackQuery):
     await call.answer()
 
 
-@admin_router.callback_query(F.data == "adm_settings")
-async def adm_settings(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
+async def build_settings_view():
     enabled = await get_setting("working_hours_enabled", "1")
     start = await get_setting("working_hours_start", DEFAULT_WORKING_HOURS_START)
     end = await get_setting("working_hours_end", DEFAULT_WORKING_HOURS_END)
-    status_label = "yoqilgan" if enabled == "1" else "o'chirilgan"
+    status_label = "yoqilgan ✅" if enabled == "1" else "o'chirilgan ❌"
     limit_msgs, limit_secs, dup_window = await get_flood_settings()
     reminder_minutes = await get_setting("reminder_minutes", "30")
     auto_assign = await get_setting("auto_assign_enabled", "1")
-    auto_assign_label = "yoqilgan" if auto_assign == "1" else "o'chirilgan"
+    auto_assign_label = "yoqilgan ✅" if auto_assign == "1" else "o'chirilgan ❌"
     text = (
         f"⚙️ <b>Sozlamalar</b>\n\n"
         f"🕐 Ish vaqti: {status_label}\n"
-        f"Boshlanishi: {start}\nTugashi: {end}\n"
-        f"O'zgartirish: /sethours 09:00 18:00\n"
-        f"Ish vaqtini o'chirish: /hoursoff | Yoqish: /hourson\n\n"
+        f"Boshlanishi: {start} | Tugashi: {end}\n\n"
         f"🚦 Rate-limit: {limit_msgs} xabar / {limit_secs} soniya\n"
-        f"Dublikat oynasi: {dup_window} soniya\n"
-        f"O'zgartirish: /setflood {limit_msgs} {limit_secs} {dup_window}\n\n"
-        f"⏰ Eslatma vaqti: {reminder_minutes} daqiqa (javobsiz qolsa)\n"
-        f"O'zgartirish: /setreminder 30\n\n"
-        f"🎯 Avto-taqsimlash: {auto_assign_label}\n"
-        f"O'zgartirish: /autoassign on yoki /autoassign off\n\n"
-        f"🤖 Gemini AI: {'sozlangan ✅' if GEMINI_API_KEY else 'sozlanmagan ❌ (GEMINI_API_KEY kerak)'}"
+        f"Dublikat oynasi: {dup_window} soniya\n\n"
+        f"⏰ Eslatma vaqti: {reminder_minutes} daqiqa (javobsiz qolsa)\n\n"
+        f"🎯 Avto-taqsimlash: {auto_assign_label}\n\n"
+        f"🤖 Gemini AI: {'sozlangan ✅' if GEMINI_API_KEY else 'sozlanmagan ❌ (GEMINI_API_KEY kerak)'}\n\n"
+        f"O'zgartirish uchun tugmalardan foydalaning:"
     )
-    await call.message.edit_text(text, reply_markup=settings_kb())
+    kb = settings_kb(enabled == "1", auto_assign == "1")
+    return text, kb
+
+
+@admin_router.callback_query(F.data == "adm_settings")
+async def adm_settings(call: CallbackQuery):
+    text, kb = await build_settings_view()
+    await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
 
 
-@admin_router.message(Command("sethours"))
-async def set_hours_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 3:
-        await message.answer("Foydalanish: /sethours 09:00 18:00")
-        return
-    await set_setting("working_hours_start", parts[1])
-    await set_setting("working_hours_end", parts[2])
-    await message.answer(f"✅ Ish vaqti: {parts[1]} - {parts[2]}")
+@admin_router.callback_query(F.data == "adm_toggle_hours")
+async def adm_toggle_hours(call: CallbackQuery):
+    enabled = await get_setting("working_hours_enabled", "1")
+    await set_setting("working_hours_enabled", "0" if enabled == "1" else "1")
+    text, kb = await build_settings_view()
+    await call.message.edit_text(text, reply_markup=kb)
+    await call.answer("Yangilandi ✅")
 
 
-@admin_router.message(Command("hoursoff"))
-async def hours_off(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    await set_setting("working_hours_enabled", "0")
-    await message.answer("✅ Ish vaqti tekshiruvi o'chirildi.")
+@admin_router.callback_query(F.data == "adm_toggle_autoassign")
+async def adm_toggle_autoassign(call: CallbackQuery):
+    val = await get_setting("auto_assign_enabled", "1")
+    await set_setting("auto_assign_enabled", "0" if val == "1" else "1")
+    text, kb = await build_settings_view()
+    await call.message.edit_text(text, reply_markup=kb)
+    await call.answer("Yangilandi ✅")
 
 
-@admin_router.message(Command("hourson"))
-async def hours_on(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    await set_setting("working_hours_enabled", "1")
-    await message.answer("✅ Ish vaqti tekshiruvi yoqildi.")
-
-
-@admin_router.message(Command("setflood"))
-async def set_flood_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 4 or not all(p.isdigit() for p in parts[1:]):
-        await message.answer("Foydalanish: /setflood 5 60 30\n(xabar_soni tekshiruv_soniya dublikat_soniya)")
-        return
-    await set_setting("flood_limit_messages", parts[1])
-    await set_setting("flood_limit_seconds", parts[2])
-    await set_setting("duplicate_window_seconds", parts[3])
-    await message.answer(
-        f"✅ Rate-limit yangilandi: {parts[1]} xabar / {parts[2]} soniya, dublikat oynasi: {parts[3]} soniya"
+@admin_router.callback_query(F.data == "adm_sethours")
+async def adm_sethours_start(call: CallbackQuery):
+    admin_pending[call.from_user.id] = "sethours"
+    await call.message.answer(
+        "🕐 Ish vaqtini shu formatda kiriting:\n<code>09:00 18:00</code>",
+        reply_markup=admin_cancel_kb()
     )
+    await call.answer()
 
 
-@admin_router.message(Command("setreminder"))
-async def set_reminder_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /setreminder 30")
-        return
-    await set_setting("reminder_minutes", parts[1])
-    await message.answer(f"✅ Eslatma vaqti: {parts[1]} daqiqa")
+@admin_router.callback_query(F.data == "adm_setflood")
+async def adm_setflood_start(call: CallbackQuery):
+    admin_pending[call.from_user.id] = "setflood"
+    await call.message.answer(
+        "🚦 Rate-limit qiymatlarini shu formatda kiriting (xabar_soni tekshiruv_soniya dublikat_soniya):\n<code>5 60 30</code>",
+        reply_markup=admin_cancel_kb()
+    )
+    await call.answer()
 
 
-@admin_router.message(Command("autoassign"))
-async def autoassign_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 2 or parts[1] not in ("on", "off"):
-        await message.answer("Foydalanish: /autoassign on yoki /autoassign off")
-        return
-    await set_setting("auto_assign_enabled", "1" if parts[1] == "on" else "0")
-    await message.answer(f"✅ Avto-taqsimlash: {'yoqildi' if parts[1] == 'on' else 'o‘chirildi'}")
+@admin_router.callback_query(F.data == "adm_setreminder")
+async def adm_setreminder_start(call: CallbackQuery):
+    admin_pending[call.from_user.id] = "setreminder"
+    await call.message.answer(
+        "⏰ Eslatma vaqtini daqiqada kiriting:\n<code>30</code>",
+        reply_markup=admin_cancel_kb()
+    )
+    await call.answer()
 
 
-@admin_router.message(Command("search"))
-async def search_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    query_text = message.text.replace("/search", "", 1).strip()
-    if not query_text:
-        await message.answer("Foydalanish: /search so'z_yoki_ism")
-        return
-    results = await search_tickets(query_text)
-    if not results:
-        await message.answer("Hech narsa topilmadi.")
-        return
-    lines = ["🔍 <b>Qidiruv natijalari:</b>\n"] + [ticket_summary_line(tt) for tt in results]
-    await message.answer("\n".join(lines))
+@admin_router.callback_query(F.data == "adm_search")
+async def adm_search_start(call: CallbackQuery):
+    admin_pending[call.from_user.id] = "search"
+    await call.message.answer("🔍 Qidiruv uchun so'z yoki ismni kiriting:", reply_markup=admin_cancel_kb())
+    await call.answer()
 
 
-@admin_router.message(Command("topusers"))
-async def top_users_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
+@admin_router.callback_query(F.data == "adm_topusers")
+async def adm_topusers_cb(call: CallbackQuery):
     top = await get_top_users()
     if not top:
-        await message.answer("Hozircha ma'lumot yo'q.")
+        await call.answer("Hozircha ma'lumot yo'q.", show_alert=True)
         return
     lines = ["🏆 <b>Eng ko'p murojaat qiluvchilar:</b>\n"]
     for i, u in enumerate(top, 1):
         username = f"@{u['username']}" if u["username"] else u["full_name"]
         lines.append(f"{i}. {username} — {u['cnt']} ta murojaat")
-    await message.answer("\n".join(lines))
+    await call.message.answer("\n".join(lines))
+    await call.answer()
 
 
-@admin_router.message(Command("backup"))
-async def backup_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
+@admin_router.callback_query(F.data == "adm_backup")
+async def adm_backup_cb(call: CallbackQuery):
     try:
         with open(DB_PATH, "rb") as f:
             file = BufferedInputFile(f.read(), filename="anifilm_bot_backup.db")
-        await message.answer_document(file, caption="🔄 Ma'lumotlar bazasi zaxira nusxasi")
+        await call.message.answer_document(file, caption="🔄 Ma'lumotlar bazasi zaxira nusxasi")
     except Exception as e:
-        await message.answer(f"Xatolik: {e}")
+        await call.message.answer(f"Xatolik: {e}")
+    await call.answer()
 
 
 @admin_router.message(F.reply_to_message)
@@ -1824,11 +1806,12 @@ async def handle_admin_reply(message: Message):
 
 @admin_router.message(F.text)
 async def handle_admin_plain_text(message: Message):
-    if not is_admin(message.from_user.id):
-        return
     if not message.text or message.text.startswith("/"):
         return
     pending = admin_pending.get(message.from_user.id)
+    if not pending:
+        return
+
     if pending == "broadcast":
         admin_pending.pop(message.from_user.id, None)
         broadcast_pending_text[message.from_user.id] = message.text
@@ -1840,6 +1823,78 @@ async def handle_admin_plain_text(message: Message):
             f"Quyidagi xabar barcha foydalanuvchilarga yuboriladi:\n\n{message.text}\n\nTasdiqlaysizmi?",
             reply_markup=confirm_kb.as_markup()
         )
+        return
+
+    if pending == "addchannel":
+        raw = message.text.strip()
+        if "|" not in raw:
+            await message.answer("❌ Format noto'g'ri. Qaytadan kiriting:\n<code>Nomi | https://t.me/link</code>", reply_markup=admin_cancel_kb())
+            return
+        name, link = (p.strip() for p in raw.split("|", 1))
+        if not name or not link:
+            await message.answer("❌ Format noto'g'ri. Qaytadan kiriting:\n<code>Nomi | https://t.me/link</code>", reply_markup=admin_cancel_kb())
+            return
+        admin_pending.pop(message.from_user.id, None)
+        await add_channel(name, link)
+        await message.answer(f"✅ Kanal qo'shildi: 🟢 {name} — {link}")
+        return
+
+    if pending == "addtemplate":
+        raw = message.text.strip()
+        if "|" not in raw:
+            await message.answer("❌ Format noto'g'ri. Qaytadan kiriting:\n<code>Nomi | Matni</code>", reply_markup=admin_cancel_kb())
+            return
+        label, text_val = (p.strip() for p in raw.split("|", 1))
+        if not label or not text_val:
+            await message.answer("❌ Format noto'g'ri. Qaytadan kiriting:\n<code>Nomi | Matni</code>", reply_markup=admin_cancel_kb())
+            return
+        admin_pending.pop(message.from_user.id, None)
+        await add_template(label, text_val)
+        await message.answer(f"✅ Shablon qo'shildi: {label}")
+        return
+
+    if pending == "sethours":
+        parts = message.text.split()
+        if len(parts) != 2:
+            await message.answer("❌ Format noto'g'ri. Qaytadan kiriting:\n<code>09:00 18:00</code>", reply_markup=admin_cancel_kb())
+            return
+        admin_pending.pop(message.from_user.id, None)
+        await set_setting("working_hours_start", parts[0])
+        await set_setting("working_hours_end", parts[1])
+        await message.answer(f"✅ Ish vaqti: {parts[0]} - {parts[1]}")
+        return
+
+    if pending == "setflood":
+        parts = message.text.split()
+        if len(parts) != 3 or not all(p.isdigit() for p in parts):
+            await message.answer("❌ Format noto'g'ri. Qaytadan kiriting:\n<code>5 60 30</code>", reply_markup=admin_cancel_kb())
+            return
+        admin_pending.pop(message.from_user.id, None)
+        await set_setting("flood_limit_messages", parts[0])
+        await set_setting("flood_limit_seconds", parts[1])
+        await set_setting("duplicate_window_seconds", parts[2])
+        await message.answer(f"✅ Rate-limit yangilandi: {parts[0]} xabar / {parts[1]} soniya, dublikat: {parts[2]} soniya")
+        return
+
+    if pending == "setreminder":
+        val = message.text.strip()
+        if not val.isdigit():
+            await message.answer("❌ Faqat son kiriting. Qaytadan kiriting:\n<code>30</code>", reply_markup=admin_cancel_kb())
+            return
+        admin_pending.pop(message.from_user.id, None)
+        await set_setting("reminder_minutes", val)
+        await message.answer(f"✅ Eslatma vaqti: {val} daqiqa")
+        return
+
+    if pending == "search":
+        admin_pending.pop(message.from_user.id, None)
+        results = await search_tickets(message.text.strip())
+        if not results:
+            await message.answer("Hech narsa topilmadi.")
+            return
+        lines = ["🔍 <b>Qidiruv natijalari:</b>\n"] + [ticket_summary_line(tt) for tt in results]
+        await message.answer("\n".join(lines))
+        return
 
 
 # ======================= XATOLIKLAR =======================
