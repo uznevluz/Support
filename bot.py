@@ -14,6 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile, ErrorEvent
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 logging.basicConfig(level=logging.INFO)
@@ -216,6 +217,14 @@ def t(key, lang, **kwargs):
     if kwargs:
         text_val = text_val.format(**kwargs)
     return text_val
+
+
+async def safe_edit_text(message: Message, text: str, reply_markup=None):
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 # ======================= GEMINI AI =======================
@@ -987,14 +996,14 @@ async def cmd_start(message: Message):
 @user_router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(call: CallbackQuery):
     lang = await get_user_language(call.from_user.id)
-    await call.message.edit_text(t("welcome", lang), reply_markup=main_menu_kb(lang))
+    await safe_edit_text(call.message, t("welcome", lang), reply_markup=main_menu_kb(lang))
     await call.answer()
 
 
 @user_router.callback_query(F.data == "choose_language")
 async def choose_language_cb(call: CallbackQuery):
     lang = await get_user_language(call.from_user.id)
-    await call.message.edit_text(t("choose_language", lang), reply_markup=language_kb())
+    await safe_edit_text(call.message, t("choose_language", lang), reply_markup=language_kb())
     await call.answer()
 
 
@@ -1002,7 +1011,7 @@ async def choose_language_cb(call: CallbackQuery):
 async def set_language_cb(call: CallbackQuery):
     lang = call.data.split(":")[1]
     await set_user_language(call.from_user.id, lang)
-    await call.message.edit_text(t("language_set", lang), reply_markup=main_menu_kb(lang))
+    await safe_edit_text(call.message, t("language_set", lang), reply_markup=main_menu_kb(lang))
     await call.answer()
 
 
@@ -1010,7 +1019,7 @@ async def set_language_cb(call: CallbackQuery):
 async def show_channels(call: CallbackQuery):
     lang = await get_user_language(call.from_user.id)
     text = t("channels_header", lang)
-    await call.message.edit_text(text, reply_markup=await channels_kb(lang))
+    await safe_edit_text(call.message, text, reply_markup=await channels_kb(lang))
     await call.answer()
 
 
@@ -1030,7 +1039,7 @@ async def my_tickets(call: CallbackQuery):
     b = InlineKeyboardBuilder()
     b.button(text=t("back_button", lang), callback_data="back_to_menu", style="primary")
     b.adjust(1)
-    await call.message.edit_text(text, reply_markup=b.as_markup())
+    await safe_edit_text(call.message, text, reply_markup=b.as_markup())
     await call.answer()
 
 
@@ -1049,7 +1058,7 @@ async def cancel_category_cb(call: CallbackQuery):
     user_pending_category.pop(call.from_user.id, None)
     lang = await get_user_language(call.from_user.id)
     try:
-        await call.message.edit_text(t("welcome", lang), reply_markup=main_menu_kb(lang))
+        await safe_edit_text(call.message, t("welcome", lang), reply_markup=main_menu_kb(lang))
     except Exception:
         await call.message.answer(t("welcome", lang), reply_markup=main_menu_kb(lang))
     await call.answer("Bekor qilindi")
@@ -1189,7 +1198,7 @@ async def user_reveal_reply(call: CallbackQuery):
         pass
 
     try:
-        await call.message.edit_text(t("reveal_opened", lang))
+        await safe_edit_text(call.message, t("reveal_opened", lang))
     except Exception:
         pass
 
@@ -1235,7 +1244,7 @@ async def user_rate(call: CallbackQuery):
             except Exception:
                 pass
     try:
-        await call.message.edit_text(t("rating_thanks", lang, score=score))
+        await safe_edit_text(call.message, t("rating_thanks", lang, score=score))
     except Exception:
         pass
     await call.answer()
@@ -1274,7 +1283,7 @@ async def admin_panel(message: Message):
 async def adm_back(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    await call.message.edit_text("🛠 <b>Admin panel</b>", reply_markup=admin_main_kb())
+    await safe_edit_text(call.message, "🛠 <b>Admin panel</b>", reply_markup=admin_main_kb())
     await call.answer()
 
 
@@ -1291,12 +1300,12 @@ async def adm_list(call: CallbackQuery):
         tickets = await list_tickets(category=kind)
 
     if not tickets:
-        await call.message.edit_text("Hozircha xabar yo'q.", reply_markup=admin_main_kb())
+        await safe_edit_text(call.message, "Hozircha xabar yo'q.", reply_markup=admin_main_kb())
         return await call.answer()
 
     text = "📋 <b>Xabarlar ro'yxati</b>\n\n" + "\n".join(ticket_summary_line(tt) for tt in tickets)
     text += "\n\nOchish uchun raqamni bosing:"
-    await call.message.edit_text(text, reply_markup=tickets_list_kb(tickets))
+    await safe_edit_text(call.message, text, reply_markup=tickets_list_kb(tickets))
     await call.answer()
 
 
@@ -1395,7 +1404,7 @@ async def adm_blocked_list(call: CallbackQuery):
         if not users
         else "🚫 <b>Bloklangan foydalanuvchilar</b>\n\nBlokdan chiqarish uchun tugmani bosing:"
     )
-    await call.message.edit_text(text, reply_markup=blocked_manage_kb(users))
+    await safe_edit_text(call.message, text, reply_markup=blocked_manage_kb(users))
     await call.answer()
 
 
@@ -1409,7 +1418,7 @@ async def adm_unblock(call: CallbackQuery):
         if not users
         else "🚫 <b>Bloklangan foydalanuvchilar</b>\n\nBlokdan chiqarish uchun tugmani bosing:"
     )
-    await call.message.edit_text(text, reply_markup=blocked_manage_kb(users))
+    await safe_edit_text(call.message, text, reply_markup=blocked_manage_kb(users))
     await call.answer("Blokdan chiqarildi ✅")
 
 
@@ -1423,7 +1432,7 @@ async def adm_channels(call: CallbackQuery):
     else:
         lines = "Hozircha kanal qo'shilmagan."
     text = f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
-    await call.message.edit_text(text, reply_markup=channels_manage_kb(channels))
+    await safe_edit_text(call.message, text, reply_markup=channels_manage_kb(channels))
     await call.answer()
 
 
@@ -1438,7 +1447,7 @@ async def adm_delchannel(call: CallbackQuery):
         await call.answer("Topilmadi")
     lines = "\n".join(f"🟢 {name} — {link}" for name, link in channels) if channels else "Hozircha kanal qo'shilmagan."
     text = f"📢 <b>Rasmiy kanallar</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
-    await call.message.edit_text(text, reply_markup=channels_manage_kb(channels))
+    await safe_edit_text(call.message, text, reply_markup=channels_manage_kb(channels))
 
 
 @admin_router.callback_query(F.data == "adm_addchannel")
@@ -1458,7 +1467,7 @@ async def adm_templates(call: CallbackQuery):
     templates = await get_templates()
     lines = "\n".join(f"🟢 {tpl['label']} — {tpl['text']}" for tpl in templates) if templates else "Hozircha shablon yo'q."
     text = f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
-    await call.message.edit_text(text, reply_markup=await templates_manage_kb(templates))
+    await safe_edit_text(call.message, text, reply_markup=await templates_manage_kb(templates))
     await call.answer()
 
 
@@ -1470,7 +1479,7 @@ async def adm_deltemplate(call: CallbackQuery):
     await call.answer("O'chirildi ✅" if ok else "Topilmadi")
     lines = "\n".join(f"🟢 {tpl['label']} — {tpl['text']}" for tpl in templates) if templates else "Hozircha shablon yo'q."
     text = f"🗂 <b>Tayyor javob shablonlari</b>\n\n{lines}\n\nQo'shish yoki o'chirish uchun tugmalardan foydalaning."
-    await call.message.edit_text(text, reply_markup=await templates_manage_kb(templates))
+    await safe_edit_text(call.message, text, reply_markup=await templates_manage_kb(templates))
 
 
 @admin_router.callback_query(F.data == "adm_addtemplate")
@@ -1522,7 +1531,7 @@ async def adm_cancel_pending(call: CallbackQuery):
     admin_pending.pop(call.from_user.id, None)
     broadcast_pending_text.pop(call.from_user.id, None)
     await call.answer("Bekor qilindi")
-    await call.message.edit_text("🛠 <b>Admin panel</b>", reply_markup=admin_main_kb())
+    await safe_edit_text(call.message, "🛠 <b>Admin panel</b>", reply_markup=admin_main_kb())
 
 
 @admin_router.callback_query(F.data.startswith("claim:"))
@@ -1573,7 +1582,7 @@ async def admin_view_msg(call: CallbackQuery):
             pass
 
     try:
-        await call.message.edit_text("✅ Xabar ochildi (yuqorida).")
+        await safe_edit_text(call.message, "✅ Xabar ochildi (yuqorida).")
     except Exception:
         pass
 
@@ -1636,7 +1645,7 @@ async def adm_stats(call: CallbackQuery):
         f"✅ Hal qilingan: {s['resolved']}",
         f"⏳ Kutilayotgan: {s['pending']}",
     ]
-    await call.message.edit_text("\n".join(lines), reply_markup=admin_main_kb())
+    await safe_edit_text(call.message, "\n".join(lines), reply_markup=admin_main_kb())
     await call.answer()
 
 
@@ -1677,7 +1686,7 @@ async def build_settings_view():
 @admin_router.callback_query(F.data == "adm_settings")
 async def adm_settings(call: CallbackQuery):
     text, kb = await build_settings_view()
-    await call.message.edit_text(text, reply_markup=kb)
+    await safe_edit_text(call.message, text, reply_markup=kb)
     await call.answer()
 
 
@@ -1686,7 +1695,7 @@ async def adm_toggle_hours(call: CallbackQuery):
     enabled = await get_setting("working_hours_enabled", "1")
     await set_setting("working_hours_enabled", "0" if enabled == "1" else "1")
     text, kb = await build_settings_view()
-    await call.message.edit_text(text, reply_markup=kb)
+    await safe_edit_text(call.message, text, reply_markup=kb)
     await call.answer("Yangilandi ✅")
 
 
@@ -1695,7 +1704,7 @@ async def adm_toggle_autoassign(call: CallbackQuery):
     val = await get_setting("auto_assign_enabled", "1")
     await set_setting("auto_assign_enabled", "0" if val == "1" else "1")
     text, kb = await build_settings_view()
-    await call.message.edit_text(text, reply_markup=kb)
+    await safe_edit_text(call.message, text, reply_markup=kb)
     await call.answer("Yangilandi ✅")
 
 
@@ -1804,10 +1813,8 @@ async def handle_admin_reply(message: Message):
         await message.answer(f"❌ Yuborib bo'lmadi: {e}")
 
 
-@admin_router.message(F.text)
+@admin_router.message(F.text, ~F.text.startswith("/"))
 async def handle_admin_plain_text(message: Message):
-    if not message.text or message.text.startswith("/"):
-        return
     pending = admin_pending.get(message.from_user.id)
     if not pending:
         return
